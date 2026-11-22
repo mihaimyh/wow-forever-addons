@@ -461,10 +461,14 @@ function UI:StepAnimations(elapsed)
 	if self.popTime and self.popTime > 0 then
 		self.popTime = math.max(0, self.popTime - dt)
 		local t = self.popTime / POP_DURATION
-		local scale = 1.0 + 0.08 * (t * t)
-		if self.main then self.main:SetScale(scale) end
-	elseif self.main and self.main:GetScale() ~= 1 then
-		self.main:SetScale(1)
+		-- Zoom the texture via SetTexCoord instead of Frame:SetScale() so
+		-- frames anchored to the secure click-to-cast button never taint in combat.
+		local inset = 0.08 + 0.04 * (t * t)
+		if self.mainIcon then self.mainIcon:SetTexCoord(inset, 1 - inset, inset, 1 - inset) end
+		self.popActive = true
+	elseif self.popActive and self.mainIcon then
+		self.popActive = false
+		self.mainIcon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
 	end
 
 	if self.flashTime and self.flashTime > 0 then

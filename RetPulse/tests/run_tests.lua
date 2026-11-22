@@ -1860,6 +1860,13 @@ Test("43. Click-to-cast button is not parented under main/frame so StepAnimation
 	ui.frame:Show()
 	ui:UpdateClickCast("Blessing of Kings")
 	AssertEq(mouseEnabled, true, "clickBtn must accept clicks when HUD is shown and spell is armed out of combat")
+
+	-- Spell pop animation must never call main:SetScale() in combat
+	local scaled = false
+	ui.main.SetScale = function() scaled = true end
+	ui:TriggerSpellPop()
+	ui:StepAnimations(0.05)
+	AssertEq(scaled, false, "StepAnimations must not call main:SetScale() (uses SetTexCoord zoom)")
 end)
 
 print(string.format("\nResults: %d passed, %d failed", passed, failed))
