@@ -25,6 +25,7 @@ local MAIN_SIZE = 46
 local NEXT_SIZE = 32
 local PIP_SIZE = 8
 local FADE_SPEED = 8.0
+local IDLE_ALPHA = 0.38
 local POP_DURATION = 0.16
 local FLASH_DURATION = 0.20
 local MAX_CONSECUTIVE_ERRORS = 5
@@ -527,17 +528,18 @@ function UI:StepFade(elapsed)
 	end
 end
 
-function UI:SetDesiredVisible(visible, immediate)
+function UI:SetDesiredVisible(visible, immediate, targetAlpha)
 	if not self.frame then return end
 	if visible then
-		self.targetAlpha = 1
+		local desired = targetAlpha or 1
+		self.targetAlpha = desired
 		if not self.frame:IsShown() then
-			self.currentAlpha = immediate and 1 or math.max(self.currentAlpha or 0, 0.05)
+			self.currentAlpha = immediate and desired or math.max(self.currentAlpha or 0, math.min(0.05, desired))
 			self.frame:SetAlpha(self.currentAlpha)
 			self.frame:Show()
 		elseif immediate then
-			self.currentAlpha = 1
-			self.frame:SetAlpha(1)
+			self.currentAlpha = desired
+			self.frame:SetAlpha(desired)
 		end
 	else
 		self.targetAlpha = 0
@@ -621,9 +623,11 @@ function UI:RefreshInner()
 
 	-- Unlocking reveals the HUD for a minute so it can be dragged even in combat-only mode.
 	local placing = (not db.locked) and GetTime() < (self.revealUntil or 0)
-	local visible = self:ShouldBeVisible(db, inCombat, hasHostile, placing) or (missingBlessing ~= nil) or (missingAura ~= nil)
+	local hasReminder = (missingBlessing ~= nil) or (missingAura ~= nil)
+	local visible = self:ShouldBeVisible(db, inCombat, hasHostile, placing) or hasReminder
+	local desiredAlpha = (inCombat or placing or hasReminder) and 1.0 or IDLE_ALPHA
 
-	self:SetDesiredVisible(visible, placing)
+	self:SetDesiredVisible(visible, placing, desiredAlpha)
 	if not visible then return end
 
 	self:UpdateManaBar()

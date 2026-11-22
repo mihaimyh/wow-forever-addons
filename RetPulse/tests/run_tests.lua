@@ -1423,6 +1423,40 @@ Test("30. Another Paladin's Devotion Aura does not suppress your own Aura remind
 	AssertEq(tracker:GetMissingAura(), nil, "Reminder clears once player has their own Aura active")
 end)
 
+Test("31. Always-visible mode softly fades HUD out of combat and restores full alpha on combat start", function()
+	local c = CreateEnv({
+		inCombat = false,
+		targetExists = false,
+		knownSpells = {
+			["Blessing of Kings"] = 20217,
+			["Retribution Aura"] = 7294,
+			["Seal of Righteousness"] = 20288,
+		},
+		usableSpells = {
+			["Blessing of Kings"] = true,
+			["Retribution Aura"] = true,
+			["Seal of Righteousness"] = true,
+		},
+		playerAuras = {
+			{ name = "Blessing of Kings", spellId = 20217, sourceUnit = "player", expirationTime = 4600 },
+			{ name = "Retribution Aura", spellId = 7294, sourceUnit = "player", expirationTime = 0 },
+		},
+	})
+	c.ns.db.visibility = "always"
+	local ui = c.ns:GetModule("UI")
+	ui:Refresh()
+	ui:StepFade(1.0)
+
+	AssertEq(ui.frame:IsShown(), true, "HUD stays shown in always mode")
+	Assert(ui.frame:GetAlpha() <= 0.45 and ui.frame:GetAlpha() >= 0.25,
+		"Out-of-combat always-mode HUD should be softly faded (~0.38), got: " .. tostring(ui.frame:GetAlpha()))
+
+	-- Entering combat immediately targets full opacity (1.0)
+	c.SetCombat(true)
+	ui:StepFade(1.0)
+	AssertEq(ui.frame:GetAlpha(), 1, "HUD must return to full alpha (1.0) in combat")
+end)
+
 print(string.format("\nResults: %d passed, %d failed", passed, failed))
 if failed > 0 then
 	os.exit(1)
