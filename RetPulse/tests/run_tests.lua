@@ -1767,6 +1767,85 @@ Test("41. Crusader opener fires once per pull in combat (not on every tab-target
 	AssertEq(pq:Evaluate(), "Seal of the Crusader", "New pull after leaving combat resets Crusader opener")
 end)
 
+Test("42. Group buff advisor detects missing party/raid blessings by class and arms click-to-cast on unit", function()
+	local partyAuras = {
+		party1 = {}, -- Warrior with no buffs
+		party2 = { { name = "Greater Blessing of Kings", spellId = 25898, sourceUnit = "party3", expirationTime = 4000 } }, -- Mage with Kings from another paladin
+	}
+	local partyClasses = { party1 = "WARRIOR", party2 = "MAGE" }
+	local partyNames = { party1 = "Grom", party2 = "Jaina" }
+
+	local c = CreateEnv({
+		inCombat = false,
+		targetExists = false,
+		knownSpells = {
+			["Blessing of Kings"] = 20217,
+			["Blessing of Might"] = 19740,
+			["Blessing of Wisdom"] = 19742,
+			["Retribution Aura"] = 7294,
+			["Seal of Righteousness"] = 20288,
+		},
+		playerAuras = {
+			{ name = "Blessing of Kings", spellId = 20217, sourceUnit = "player", expirationTime = 4000 },
+			{ name = "Retribution Aura", spellId = 7294, sourceUnit = "player", expirationTime = 0 },
+		},
+	})
+	c.env.IsInGroup = function() return true end
+	c.env.IsInRaid = function() return false end
+	c.env.GetNumGroupMembers = function() return 3 end
+	c.env.UnitExists = function(u)
+		if u == "target" then return false end
+		return partyAuras[u] ~= nil
+	end
+	c.env.UnitIsConnected = function() return true end
+	c.env.UnitIsDeadOrGhost = function() return false end
+	c.env.UnitIsUnit = function(a, b) return a == b end
+	c.env.UnitClass = function(u)
+		local cls = partyClasses[u] or "PALADIN"
+		return cls, cls
+	end
+	c.env.UnitName = function(u) return partyNames[u] or u end
+	c.env.UnitPowerType = function(u) return (partyClasses[u] == "MAGE") and 0 or 1 end
+	c.env.C_Spell.IsSpellInRange = function(_, u) return u == "party1" or u == "party2" end
+	c.env.C_UnitAuras.GetAuraDataByIndex = function(u, idx)
+		if u == "player" then
+			return (idx == 1 and { name = "Blessing of Kings", spellId = 20217, sourceUnit = "player", expirationTime = 4000 })
+				or (idx == 2 and { name = "Retribution Aura", spellId = 7294, sourceUnit = "player", expirationTime = 0 })
+				or nil
+		end
+		return partyAuras[u] and partyAuras[u][idx] or nil
+	end
+
+	local tracker = c.ns:GetModule("CombatTracker")
+	tracker:RefreshSeal()
+
+	local spell, unit, unitName = tracker:GetMissingGroupBlessing()
+	AssertEq(spell, "Blessing of Kings", "Unbuffed party warrior should get Blessing of Kings")
+	AssertEq(unit, "party1", "Target unit should be party1")
+	AssertEq(unitName, "Grom", "Target name should be Grom")
+
+	local ui = c.ns:GetModule("UI")
+	local attrs = {}
+	ui.clickBtn.SetAttribute = function(_, k, v) attrs[k] = v end
+	ui:Refresh()
+	AssertEq(attrs.spell, "Blessing of Kings", "Click-to-cast must arm Blessing of Kings")
+	AssertEq(attrs.unit, "party1", "Click-to-cast must target party1")
+	AssertEq(ui.status:GetText(), "BUFF: Grom", "HUD status must show who needs the buff")
+
+	-- Buff party1 -> now party2 (Mage with Kings) should get Blessing of Wisdom
+	partyAuras.party1 = { { name = "Blessing of Kings", spellId = 20217, sourceUnit = "player", expirationTime = 4000 } }
+	spell, unit, unitName = tracker:GetMissingGroupBlessing()
+	AssertEq(spell, "Blessing of Wisdom", "Mage with Kings from another paladin should get Blessing of Wisdom")
+	AssertEq(unit, "party2", "Target unit should be party2")
+
+	-- Buff party2 -> all party members covered, unit attribute clears
+	partyAuras.party2[2] = { name = "Blessing of Wisdom", spellId = 19742, sourceUnit = "player", expirationTime = 4000 }
+	spell = tracker:GetMissingGroupBlessing()
+	AssertEq(spell, nil, "No missing group blessings once all members are buffed")
+	ui:Refresh()
+	AssertEq(attrs.unit, nil, "Click-to-cast unit attribute must clear when no group buff is pending")
+end)
+
 print(string.format("\nResults: %d passed, %d failed", passed, failed))
 if failed > 0 then
 	os.exit(1)

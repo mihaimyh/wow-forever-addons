@@ -454,6 +454,103 @@ function CombatTracker:GetMissingBlessing()
 	return desired
 end
 
+local CASTER_CLASSES = { MAGE = true, PRIEST = true, WARLOCK = true }
+local PHYSICAL_CLASSES = { WARRIOR = true, ROGUE = true }
+
+local function BlessingOrderForUnit(unit)
+	local okC, _, classToken = pcall(UnitClass, unit)
+	classToken = okC and ns.IsReadable(classToken) and classToken or nil
+
+	local powerType
+	if UnitPowerType then
+		local okP, pt = pcall(UnitPowerType, unit)
+		if okP and ns.IsReadable(pt) and type(pt) == "number" then
+			powerType = pt
+		end
+	end
+
+	-- Casters always prefer Kings -> Wisdom (never Might).
+	if classToken and CASTER_CLASSES[classToken] then
+		return { ns.SPELLS.BLESSING_KINGS, ns.SPELLS.BLESSING_WISDOM }
+	end
+	-- Pure rage/energy melee prefer Kings -> Might (never Wisdom).
+	if classToken and PHYSICAL_CLASSES[classToken] then
+		return { ns.SPELLS.BLESSING_KINGS, ns.SPELLS.BLESSING_MIGHT }
+	end
+	-- Bear/Cat Druids (rage/energy) prefer Might; mana hybrids prefer Wisdom/Might.
+	if powerType == 1 or powerType == 3 then
+		return { ns.SPELLS.BLESSING_KINGS, ns.SPELLS.BLESSING_MIGHT }
+	end
+	if classToken == "HUNTER" then
+		return { ns.SPELLS.BLESSING_KINGS, ns.SPELLS.BLESSING_MIGHT, ns.SPELLS.BLESSING_WISDOM }
+	end
+	if powerType == 0 then
+		return { ns.SPELLS.BLESSING_KINGS, ns.SPELLS.BLESSING_WISDOM, ns.SPELLS.BLESSING_MIGHT }
+	end
+	return { ns.SPELLS.BLESSING_KINGS, ns.SPELLS.BLESSING_MIGHT, ns.SPELLS.BLESSING_WISDOM }
+end
+
+function CombatTracker:GetMissingGroupBlessing()
+	if InCombatLockdown() then return nil end
+	if ns.db and ns.db.remindGroupBlessings == false then return nil end
+	if UnitIsDeadOrGhost and UnitIsDeadOrGhost("player") then return nil end
+	if not C_UnitAuras or not C_UnitAuras.GetAuraDataByIndex then return nil end
+	if not IsInGroup or not IsInGroup() then return nil end
+
+	local inRaid = IsInRaid and IsInRaid() or false
+	local total = GetNumGroupMembers and GetNumGroupMembers() or 0
+	local prefix = inRaid and "raid" or "party"
+	local maxUnits = inRaid and math.min(total, 40) or math.min(total, 4)
+
+	for idx = 1, maxUnits do
+		local unit = prefix .. idx
+		local exists = UnitExists and UnitExists(unit)
+		local connected = (not UnitIsConnected) or UnitIsConnected(unit)
+		local dead = UnitIsDeadOrGhost and UnitIsDeadOrGhost(unit)
+		local isSelf = UnitIsUnit and UnitIsUnit(unit, "player")
+		if exists and connected and not dead and not isSelf then
+			local hasOwn = false
+			local active = {}
+			for i = 1, 40 do
+				local ok, aura = pcall(C_UnitAuras.GetAuraDataByIndex, unit, i, "HELPFUL")
+				if not ok or not aura then break end
+				local name = aura.name
+				if name ~= nil and not ns.IsSecret(name) and self:IsBlessingName(name) then
+					active[name] = true
+					local src = aura.sourceUnit
+					if src ~= nil and not ns.IsSecret(src) and src == "player" then
+						hasOwn = true
+						break
+					end
+				end
+			end
+
+			if not hasOwn then
+				for _, spellName in ipairs(BlessingOrderForUnit(unit)) do
+					if IsSpellKnownByName(spellName) and not active[spellName] and not active["Greater " .. spellName] then
+						local inRange = true
+						if C_Spell and C_Spell.IsSpellInRange then
+							local okR, r = pcall(C_Spell.IsSpellInRange, spellName, unit)
+							if okR and ns.IsReadable(r) and r == false then
+								inRange = false
+							end
+						end
+						if inRange then
+							local okN, unitName = pcall(UnitName, unit)
+							if not okN or not ns.IsReadable(unitName) or unitName == "" then
+								unitName = unit
+							end
+							return spellName, unit, unitName
+						end
+						break
+					end
+				end
+			end
+		end
+	end
+	return nil
+end
+
 function CombatTracker:GetMissingAura()
 	if InCombatLockdown() then return nil end
 	if UnitIsDeadOrGhost and UnitIsDeadOrGhost("player") then return nil end

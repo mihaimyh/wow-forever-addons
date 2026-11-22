@@ -617,7 +617,11 @@ function UI:BuildClickCast(frame, main, cooldown)
 	btn:HookScript("OnEnter", function(b)
 		if not UI.clickSpell or not GameTooltip then return end
 		GameTooltip:SetOwner(b, "ANCHOR_TOP")
-		GameTooltip:SetText("Click to cast " .. UI.clickSpell)
+		local text = "Click to cast " .. UI.clickSpell
+		if UI.clickUnitName then
+			text = text .. " on " .. UI.clickUnitName
+		end
+		GameTooltip:SetText(text)
 		GameTooltip:Show()
 	end)
 	btn:HookScript("OnLeave", function()
@@ -629,18 +633,23 @@ function UI:BuildClickCast(frame, main, cooldown)
 	self.clickBtn = btn
 end
 
-function UI:UpdateClickCast(spell)
+function UI:UpdateClickCast(spell, targetUnit, targetName)
 	local btn = self.clickBtn
 	if not btn or InCombatLockdown() then return end
 	local db = ns.db or {}
 	local want = nil
+	local wantUnit = nil
 	if spell and db.clickToCast ~= false then
 		want = spell
+		wantUnit = targetUnit
 	end
-	if want == self.clickSpell then return end
+	self.clickUnitName = want and targetName or nil
+	if want == self.clickSpell and wantUnit == self.clickUnit then return end
 	self.clickSpell = want
+	self.clickUnit = wantUnit
 	btn:SetAttribute("type", want and "spell" or nil)
 	btn:SetAttribute("spell", want)
+	btn:SetAttribute("unit", wantUnit)
 end
 
 function UI:RefreshInner()
@@ -667,14 +676,21 @@ function UI:RefreshInner()
 
 	local missingBlessing = (not inCombat) and tracker and tracker.GetMissingBlessing and tracker:GetMissingBlessing() or nil
 	local missingAura = (not inCombat) and tracker and tracker.GetMissingAura and tracker:GetMissingAura() or nil
+	local missingGroupSpell, missingGroupUnit, missingGroupName
+	if not inCombat and not missingBlessing and not missingAura and tracker and tracker.GetMissingGroupBlessing then
+		missingGroupSpell, missingGroupUnit, missingGroupName = tracker:GetMissingGroupBlessing()
+	end
 
 	local placing = (not db.locked) and GetTime() < (self.revealUntil or 0)
-	local hasReminder = (missingBlessing ~= nil) or (missingAura ~= nil)
+	local hasReminder = (missingBlessing ~= nil) or (missingAura ~= nil) or (missingGroupSpell ~= nil)
 	local visible = self:ShouldBeVisible(db, inCombat, hasHostile, placing) or hasReminder
 	local desiredAlpha = (inCombat or placing or hasReminder) and 1.0 or IDLE_ALPHA
 
 	self:SetDesiredVisible(visible, placing, desiredAlpha)
-	if not visible then return end
+	if not visible then
+		self:UpdateClickCast(nil)
+		return
+	end
 
 	self:UpdateManaBar()
 
@@ -702,10 +718,15 @@ function UI:RefreshInner()
 			nextAction = current
 		end
 		current = missingAura
+	elseif missingGroupSpell then
+		if current and current ~= missingGroupSpell then
+			nextAction = current
+		end
+		current = missingGroupSpell
 	end
 
 	local displayName = current
-	self:UpdateClickCast(current)
+	self:UpdateClickCast(current, missingGroupSpell and missingGroupUnit or nil, missingGroupSpell and missingGroupName or nil)
 	if not displayName and not queue.hasTarget then
 		displayName = tracker:GetActiveSeal()
 	end
@@ -775,6 +796,9 @@ function UI:RefreshInner()
 		statusColor = WARN
 	elseif missingAura and current == missingAura then
 		statusText = "AURA MISSING"
+		statusColor = WARN
+	elseif missingGroupSpell and current == missingGroupSpell then
+		statusText = "BUFF: " .. tostring(missingGroupName or missingGroupUnit)
 		statusColor = WARN
 	elseif queue.currentIsInterrupt then
 		statusText = "INTERRUPT"

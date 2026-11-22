@@ -46,6 +46,7 @@ local DEFAULTS = {
 	talentAdvisor = true,    -- highlight RetPulse talents on PlayerSpellsFrame.TalentsFrame
 	talentBuild = "dps",     -- "dps" (Benediction) or "leveling" (Deflection)
 	preferredBlessing = "auto", -- "auto" (Kings->Might->Wisdom) | "kings" | "might" | "wisdom" | "off"
+	remindGroupBlessings = true, -- remind out of combat to buff missing party/raid members
 	remindAura = true,          -- remind out of combat if no Paladin Aura is active
 	learnedCooldowns = {},      -- persisted talented/set-reduced spell cooldowns
 	sound = true,         -- one click on SWAP NOW
