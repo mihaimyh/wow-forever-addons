@@ -6,11 +6,11 @@ local FX = ns:NewModule("FX")
 -- a soft aura, a breathing ring, a burst on SWAP NOW and sparks when an echo is
 -- stored. Textures are generated for this addon (Media/*.tga), never borrowed.
 
-local MEDIA = "Interface\\AddOns\\RetPulse\\Media\\"
-
-local GOLD = { 0.91, 0.76, 0.39 }
-local READY = { 0.71, 1.0, 0.24 }
-local WARN = { 1.0, 0.62, 0.18 }
+local T = ns.UITheme
+local MEDIA = (T and T.MEDIA) or "Interface\\AddOns\\RetPulse\\Media\\"
+local GOLD = (T and T.GOLD) or { 0.91, 0.76, 0.39 }
+local READY = (T and T.READY) or { 0.71, 1.0, 0.24 }
+local WARN = (T and T.WARN) or { 1.0, 0.62, 0.18 }
 
 local SPARK_COUNT = 6
 local SPARK_LIFE = 0.7

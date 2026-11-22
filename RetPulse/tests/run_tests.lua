@@ -168,6 +168,7 @@ local function CreateEnv(opts)
 		function f:SetDrawBling() end
 		function f:SetHideCountdownNumbers() end
 		function f:SetSwipeColor() end
+		function f:SetReverse() end
 		function f:SetCooldown(start, dur) self._cdStart, self._cdDur = start, dur end
 		function f:SetCooldownFromDurationObject(durObj, clearIfZero)
 			self._cdDurObj, self._clearIfZero = durObj, clearIfZero
@@ -414,6 +415,7 @@ local function CreateEnv(opts)
 		"Talents.lua",
 		"Diag.lua",
 		"Trace.lua",
+		"UITheme.lua",
 		"FX.lua",
 		"UI.lua",
 		"Config.lua",
@@ -805,7 +807,9 @@ Test("12. Cooldown swipe matches spell cooldown (10s), never weapon swing speed 
 
 	AssertEq(ui.cooldown:IsShown(), true, "Cooldown swipe should be shown while waiting on spell CD")
 	AssertEq(ui.cooldown._cdDur, 10, "Cooldown swipe duration must match spell cooldown (10s), not swing (2.87s)")
-	AssertEq(ui.swingBar:IsShown(), true, "Swing timer should be shown on the separate bottom bar")
+	AssertEq(ui.swingBar:IsShown(), true, "Swing timer bar should be shown on the Command Plate")
+	Assert(ui.dial ~= nil, "Main icon hub frame should exist")
+	Assert(ui.swingRing ~= nil, "Swing bar alias should exist")
 end)
 
 Test("13. NEXT spell preview populates when current is ready or on cooldown", function()

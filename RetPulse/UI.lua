@@ -2,33 +2,28 @@ local addonName, ns = ...
 
 local UI = ns:NewModule("UI")
 
--- Modern Retribution Paladin HUD:
---   glass plate : deep obsidian gradient with razor-thin top sheen + state-reactive accent
---   top row     : three diamond echo pips, smooth 60 FPS decay bar, status/caption
---   left        : main action icon with spell-change pulse, real CD swipe, keybind pill
---   center      : bold spell title + clean status/countdown line
---   right       : subtle chevron + next action icon with keybind pill
---   bottom edge : 60 FPS auto-attack swing bar with a 1.5s GCD twist-window tick
+-- Command Plate HUD (Forever-safe, Interface 16001):
+--   left     : main spell icon + keybind pill + soft glow (no SetMask)
+--   mid      : spell name + status line
+--   right    : NEXT preview dock
+--   top rail : Unsealed Wrath echo pips + decay bar (when talent active)
+--   bottom   : weapon swing StatusBar + secret-safe mana rail
+-- Visual tokens live in UITheme.lua. Queue / FX / click-to-cast behaviour unchanged.
 
-local GOLD       = { 0.94, 0.78, 0.38 }
-local GOLD_DIM   = { 0.94, 0.78, 0.38, 0.32 }
-local IVORY      = { 0.96, 0.95, 0.91 }
-local MUTED      = { 0.72, 0.70, 0.65 }
-local READY      = { 0.62, 1.00, 0.32 }
-local WARN       = { 1.00, 0.60, 0.20 }
-local OOR        = { 1.00, 0.42, 0.38 }
-local OOM        = { 0.38, 0.68, 1.00 }
-
-local PANEL_W, PANEL_H = 266, 90
-local PANEL_H_COMPACT = 68
-local MAIN_SIZE = 46
-local NEXT_SIZE = 32
-local PIP_SIZE = 8
-local FADE_SPEED = 8.0
-local IDLE_ALPHA = 0.38
-local POP_DURATION = 0.16
-local FLASH_DURATION = 0.20
+local T = ns.UITheme
+local GOLD, GOLD_DIM = T.GOLD, T.GOLD_DIM
+local IVORY, MUTED = T.IVORY, T.MUTED
+local READY, WARN, OOR, OOM = T.READY, T.WARN, T.OOR, T.OOM
+local MEDIA = T.MEDIA
+local PANEL_W, PANEL_H = T.PANEL_W, T.PANEL_H
+local PANEL_H_COMPACT = T.PANEL_H_COMPACT
+local MAIN_SIZE, NEXT_SIZE, PIP_SIZE = T.MAIN_SIZE, T.NEXT_SIZE, T.PIP_SIZE
+local FADE_SPEED, IDLE_ALPHA = T.FADE_SPEED, T.IDLE_ALPHA
+local POP_DURATION, FLASH_DURATION = T.POP_DURATION, T.FLASH_DURATION
 local MAX_CONSECUTIVE_ERRORS = 5
+
+local SetPixelSize = T.SetPixelSize
+local SetPixelHeight = T.SetPixelHeight
 
 local function Icon(spell)
 	if not spell or not C_Spell or not C_Spell.GetSpellTexture then return nil end
@@ -52,31 +47,21 @@ local function Fmt(value)
 	return string.format("%.1fs", value)
 end
 
-local function SetPixelSize(region, w, h)
-	if PixelUtil and PixelUtil.SetSize then
-		PixelUtil.SetSize(region, w, h)
-	else
-		region:SetSize(w, h)
-	end
-end
-
-local function SetPixelHeight(region, h)
-	if PixelUtil and PixelUtil.SetHeight then
-		PixelUtil.SetHeight(region, h)
-	else
-		region:SetHeight(h)
-	end
-end
-
 local function CreateKeybindPill(parent)
 	local holder = CreateFrame("Frame", nil, parent)
-	holder:SetPoint("TOPRIGHT", parent, "TOPRIGHT", -1, -1)
+	holder:SetPoint("TOPRIGHT", parent, "TOPRIGHT", 2, 2)
 	SetPixelSize(holder, 20, 13)
 	holder:Hide()
 
 	local bg = holder:CreateTexture(nil, "BACKGROUND")
 	bg:SetAllPoints()
-	bg:SetColorTexture(0.02, 0.02, 0.04, 0.78)
+	bg:SetColorTexture(0.02, 0.02, 0.04, 0.86)
+
+	local edge = holder:CreateTexture(nil, "BORDER")
+	edge:SetPoint("TOPLEFT", -1, 1)
+	edge:SetPoint("BOTTOMRIGHT", 1, -1)
+	edge:SetColorTexture(GOLD[1], GOLD[2], GOLD[3], 0.35)
+	holder.edge = edge
 
 	local text = holder:CreateFontString(nil, "OVERLAY", "NumberFontNormalSmallGray")
 	text:SetPoint("CENTER", holder, "CENTER", 0, 0)
@@ -120,9 +105,7 @@ function UI:OnLogin()
 	if ns.db then ns.db.uiBuilt = ok end
 	if not ok then ns:RecordError("UI:Build", err) end
 
-	-- A hidden frame gets no OnUpdate, so visibility must also be event driven,
-	-- otherwise the HUD never learns that combat started. The flag mirrors the
-	-- events because InCombatLockdown can still report false inside them.
+	-- Hidden frames skip OnUpdate; visibility must also be event-driven.
 	ns:On("PLAYER_REGEN_DISABLED", function()
 		self.combatFlag = true
 		self.consecutiveErrors = 0
@@ -147,22 +130,49 @@ function UI:OnLogin()
 	self:Refresh()
 end
 
+function UI:LayoutMidband()
+	-- Keep icon + text + NEXT on one mid-row above the bottom rails.
+	local rail = T.RAIL_PAD or 10
+	local inset = T.INSET or 8
+	if self.dial then
+		self.dial:ClearAllPoints()
+		self.dial:SetPoint("LEFT", inset + 2, rail / 2)
+	end
+	if self.nextFrame then
+		self.nextFrame:ClearAllPoints()
+		self.nextFrame:SetPoint("RIGHT", -inset, rail / 2 + 4)
+	end
+	if self.chevron then
+		self.chevron:ClearAllPoints()
+		self.chevron:SetPoint("RIGHT", self.nextFrame, "LEFT", -6, 0)
+	end
+	if self.label then
+		self.label:ClearAllPoints()
+		local topNudge = self.trackerVisible and -16 or -4
+		self.label:SetPoint("LEFT", self.dial, "RIGHT", T.GAP, topNudge)
+		self.label:SetPoint("RIGHT", self.nextFrame, "LEFT", -18, topNudge)
+	end
+	if self.status then
+		self.status:ClearAllPoints()
+		self.status:SetPoint("TOPLEFT", self.label, "BOTTOMLEFT", 0, -2)
+		self.status:SetPoint("RIGHT", self.nextFrame, "LEFT", -18, 0)
+	end
+	if self.pipRow then
+		self.pipRow:ClearAllPoints()
+		self.pipRow:SetPoint("BOTTOMLEFT", self.label, "TOPLEFT", 0, 4)
+	end
+end
+
 function UI:Build()
 	local frame = CreateFrame("Frame", nil, UIParent, "BackdropTemplate")
 	SetPixelSize(frame, PANEL_W, PANEL_H)
-	frame:SetBackdrop({
-		bgFile = "Interface\\Buttons\\WHITE8X8",
-		edgeFile = "Interface\\Buttons\\WHITE8X8",
-		tile = false,
-		edgeSize = 1,
-	})
-	frame:SetBackdropColor(0.05, 0.05, 0.07, 0.86)
-	frame:SetBackdropBorderColor(GOLD_DIM[1], GOLD_DIM[2], GOLD_DIM[3], GOLD_DIM[4])
+	T.ApplyPlateBackdrop(frame)
 	frame:SetMovable(true)
 	frame:EnableMouse(true)
 	frame:RegisterForDrag("LeftButton")
 	frame:SetClampedToScreen(true)
-	frame:SetClipsChildren(true)
+	-- Do not clip children: keybind pills and NEXT label sit slightly outside icon bounds.
+	frame:SetClipsChildren(false)
 
 	frame:SetScript("OnDragStart", function(f)
 		if ns.db and not ns.db.locked then f:StartMoving() end
@@ -172,89 +182,61 @@ function UI:Build()
 		UI:SavePosition()
 	end)
 
-	-- Subtle vertical glass gradient plate
 	local bgGrad = frame:CreateTexture(nil, "BACKGROUND", nil, 1)
 	bgGrad:SetPoint("TOPLEFT", 1, -1)
 	bgGrad:SetPoint("BOTTOMRIGHT", -1, 1)
 	bgGrad:SetColorTexture(1, 1, 1, 1)
 	if CreateColor and bgGrad.SetGradient then
 		bgGrad:SetGradient("VERTICAL",
-			CreateColor(0.03, 0.03, 0.05, 0.70),
-			CreateColor(0.11, 0.10, 0.13, 0.45))
+			CreateColor(0.03, 0.03, 0.05, 0.72),
+			CreateColor(0.10, 0.09, 0.12, 0.42))
 	else
 		bgGrad:SetColorTexture(0.04, 0.04, 0.06, 0.45)
 	end
 
-	-- Razor-thin top sheen for modern depth
-	local topSheen = frame:CreateTexture(nil, "BORDER", nil, 1)
-	topSheen:SetPoint("TOPLEFT", 1, -1)
-	topSheen:SetPoint("TOPRIGHT", -1, -1)
-	SetPixelHeight(topSheen, 1)
-	topSheen:SetColorTexture(1.0, 0.94, 0.78, 0.16)
-
-	-- Left-edge state accent bar (gold idle, lime on SWAP NOW, amber on seal warning)
+	-- Short accent on the left edge only (stops above the rails so it doesn't thicken the corner).
 	local accent = frame:CreateTexture(nil, "BORDER", nil, 2)
 	accent:SetPoint("TOPLEFT", 1, -1)
-	accent:SetPoint("BOTTOMLEFT", 1, 4)
-	accent:SetWidth(2)
-	accent:SetColorTexture(GOLD[1], GOLD[2], GOLD[3], 0.85)
+	accent:SetPoint("BOTTOMLEFT", 1, (T.RAIL_PAD or 10) + 2)
+	T.SetPixelWidth(accent, T.ACCENT_W)
+	accent:SetColorTexture(GOLD[1], GOLD[2], GOLD[3], 0.75)
 
-	-- Caption
+	-- Caption top-left so it never fights the NEXT dock.
 	local caption = frame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-	caption:SetPoint("TOPRIGHT", -8, -6)
+	caption:SetPoint("TOPLEFT", 8, -4)
 	caption:SetText("RETPULSE")
-	caption:SetTextColor(GOLD[1], GOLD[2], GOLD[3], 0.45)
+	caption:SetTextColor(GOLD[1], GOLD[2], GOLD[3], 0.35)
 
-	-- Diamond echo pips
-	local pips = {}
-	for i = 1, 3 do
-		local pip = frame:CreateTexture(nil, "OVERLAY")
-		SetPixelSize(pip, PIP_SIZE, PIP_SIZE)
-		pip:SetPoint("TOPLEFT", 11 + (i - 1) * 13, -10)
-		pip:SetRotation(math.rad(45))
-		pip:SetColorTexture(GOLD[1], GOLD[2], GOLD[3], 0.16)
-		pips[i] = pip
-	end
+	-- Main icon hub (kept as `dial` for tests / debug). Never SetMask on Forever.
+	local dial = CreateFrame("Frame", nil, frame)
+	SetPixelSize(dial, MAIN_SIZE + 6, MAIN_SIZE + 6)
+	dial:SetPoint("LEFT", (T.INSET or 8) + 2, (T.RAIL_PAD or 10) / 2)
 
-	-- Echo decay bar
-	local echoBar = CreateFrame("StatusBar", nil, frame)
-	SetPixelSize(echoBar, 86, 4)
-	echoBar:SetPoint("LEFT", pips[3], "RIGHT", 9, 0)
-	echoBar:SetStatusBarTexture("Interface\\Buttons\\WHITE8X8")
-	echoBar:SetStatusBarColor(GOLD[1], GOLD[2], GOLD[3], 0.95)
-	echoBar:SetMinMaxValues(0, 1)
-	echoBar:SetValue(0)
+	local glow = dial:CreateTexture(nil, "BACKGROUND", nil, 1)
+	glow:SetTexture(MEDIA .. "glow")
+	SetPixelSize(glow, MAIN_SIZE * 1.45, MAIN_SIZE * 1.45)
+	glow:SetPoint("CENTER")
+	glow:SetBlendMode("ADD")
+	glow:SetVertexColor(GOLD[1], GOLD[2], GOLD[3], 0)
 
-	local echoTrack = echoBar:CreateTexture(nil, "BACKGROUND")
-	echoTrack:SetAllPoints()
-	echoTrack:SetColorTexture(1, 1, 1, 0.08)
-
-	local echoText = echoBar:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-	echoText:SetPoint("LEFT", echoBar, "RIGHT", 6, 0)
-	echoText:SetTextColor(IVORY[1], IVORY[2], IVORY[3], 0.75)
-
-	-- Main action icon
-	local main = CreateFrame("Frame", nil, frame)
+	local main = CreateFrame("Frame", nil, dial)
 	SetPixelSize(main, MAIN_SIZE, MAIN_SIZE)
-	main:SetPoint("BOTTOMLEFT", 10, 11)
+	main:SetPoint("CENTER")
 
 	local mainBorder = main:CreateTexture(nil, "BACKGROUND")
 	mainBorder:SetPoint("TOPLEFT", -1, 1)
 	mainBorder:SetPoint("BOTTOMRIGHT", 1, -1)
-	mainBorder:SetColorTexture(GOLD[1], GOLD[2], GOLD[3], 0.72)
+	mainBorder:SetColorTexture(GOLD[1], GOLD[2], GOLD[3], 0.80)
 
 	local mainIcon = main:CreateTexture(nil, "ARTWORK")
 	mainIcon:SetAllPoints()
 	mainIcon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
 
-	-- Subtle spell-change flash overlay
 	local flash = main:CreateTexture(nil, "OVERLAY", nil, 5)
 	flash:SetAllPoints()
 	flash:SetColorTexture(1, 0.95, 0.75, 0)
 	flash:SetBlendMode("ADD")
 
-	-- Spell cooldown / GCD swipe over the main icon, synced to the actual
-	-- recommended spell's cooldown (never the weapon swing timer).
 	local cooldown = CreateFrame("Cooldown", nil, main, "CooldownFrameTemplate")
 	cooldown:SetAllPoints(main)
 	cooldown:SetDrawEdge(true)
@@ -268,53 +250,65 @@ function UI:Build()
 	mainKeyOverlay:SetFrameLevel(cooldown:GetFrameLevel() + 2)
 	local mainKeyHolder, mainKey = CreateKeybindPill(mainKeyOverlay)
 
-	-- Auto-attack swing bar along the bottom edge of the panel (60 FPS smooth)
-	local swingBar = CreateFrame("StatusBar", nil, frame)
-	SetPixelHeight(swingBar, 3)
-	swingBar:SetPoint("BOTTOMLEFT", frame, "BOTTOMLEFT", 1, 1)
-	swingBar:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", -1, 1)
-	swingBar:SetStatusBarTexture("Interface\\Buttons\\WHITE8X8")
-	swingBar:SetStatusBarColor(GOLD[1], GOLD[2], GOLD[3], 0.85)
-	swingBar:SetMinMaxValues(0, 1)
-	swingBar:SetValue(0)
-	swingBar:Hide()
+	-- Echo pips (row above the spell name when Unsealed Wrath tracker is on).
+	local pips = {}
+	local pipRow = CreateFrame("Frame", nil, frame)
+	SetPixelSize(pipRow, (PIP_SIZE * 3) + 8, PIP_SIZE)
+	for i = 1, 3 do
+		local pip = pipRow:CreateTexture(nil, "OVERLAY")
+		SetPixelSize(pip, PIP_SIZE, PIP_SIZE)
+		pip:SetPoint("LEFT", (i - 1) * (PIP_SIZE + 4), 0)
+		pip:SetRotation(math.rad(45))
+		pip:SetColorTexture(GOLD[1], GOLD[2], GOLD[3], 0.16)
+		pips[i] = pip
+	end
 
-	local swingTrack = swingBar:CreateTexture(nil, "BACKGROUND")
-	swingTrack:SetAllPoints()
-	swingTrack:SetColorTexture(1, 1, 1, 0.07)
+	local echoBar = CreateFrame("StatusBar", nil, frame)
+	SetPixelSize(echoBar, 72, 3)
+	echoBar:SetPoint("LEFT", pipRow, "RIGHT", 6, 0)
+	echoBar:SetStatusBarTexture(T.SOLID)
+	echoBar:SetStatusBarColor(GOLD[1], GOLD[2], GOLD[3], 0.95)
+	echoBar:SetMinMaxValues(0, 1)
+	echoBar:SetValue(0)
 
-	-- 1.5s GCD twist-window marker on the swing bar
-	local swingTick = swingBar:CreateTexture(nil, "OVERLAY", nil, 3)
-	SetPixelSize(swingTick, 1, 5)
-	swingTick:SetColorTexture(1, 1, 1, 0.65)
-	swingTick:Hide()
+	local echoTrack = echoBar:CreateTexture(nil, "BACKGROUND")
+	echoTrack:SetAllPoints()
+	echoTrack:SetColorTexture(T.TRACK[1], T.TRACK[2], T.TRACK[3], T.TRACK[4])
 
-	-- Razor-thin secret-safe mana bar (2px sapphire strip right above swingBar).
-	-- Pipes raw UnitPower/UnitPowerMax straight into StatusBar without Lua math.
-	local manaBar = CreateFrame("StatusBar", nil, frame)
-	SetPixelHeight(manaBar, 2)
-	manaBar:SetPoint("BOTTOMLEFT", frame, "BOTTOMLEFT", 1, 5)
-	manaBar:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", -1, 5)
-	manaBar:SetStatusBarTexture("Interface\\Buttons\\WHITE8X8")
-	manaBar:SetStatusBarColor(0.24, 0.56, 0.96, 0.85)
-	manaBar:SetMinMaxValues(0, 1)
-	manaBar:SetValue(1)
+	local echoText = echoBar:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+	echoText:SetPoint("LEFT", echoBar, "RIGHT", 6, 0)
+	echoText:SetTextColor(IVORY[1], IVORY[2], IVORY[3], 0.70)
 
-	local manaTrack = manaBar:CreateTexture(nil, "BACKGROUND")
-	manaTrack:SetAllPoints()
-	manaTrack:SetColorTexture(1, 1, 1, 0.06)
+	local nextFrame = CreateFrame("Frame", nil, frame)
+	SetPixelSize(nextFrame, NEXT_SIZE, NEXT_SIZE)
+	nextFrame:SetPoint("RIGHT", -(T.INSET or 8), (T.RAIL_PAD or 10) / 2 + 4)
 
-	-- Holy glow behind the icon, used for SWAP NOW and for a seal about to expire.
-	local glow = main:CreateTexture(nil, "BACKGROUND", nil, 2)
-	glow:SetPoint("TOPLEFT", -6, 6)
-	glow:SetPoint("BOTTOMRIGHT", 6, -6)
-	glow:SetColorTexture(GOLD[1], GOLD[2], GOLD[3], 0)
-	glow:SetBlendMode("ADD")
+	local nextBorder = nextFrame:CreateTexture(nil, "BACKGROUND")
+	nextBorder:SetPoint("TOPLEFT", -1, 1)
+	nextBorder:SetPoint("BOTTOMRIGHT", 1, -1)
+	nextBorder:SetColorTexture(GOLD[1], GOLD[2], GOLD[3], 0.40)
 
-	-- Spell title (prominent) + secondary status/timer line
+	local nextIcon = nextFrame:CreateTexture(nil, "ARTWORK")
+	nextIcon:SetAllPoints()
+	nextIcon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
+	nextIcon:SetAlpha(0.90)
+
+	local nextKeyHolder, nextKey = CreateKeybindPill(nextFrame)
+
+	local nextLabel = frame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+	nextLabel:SetPoint("TOP", nextFrame, "BOTTOM", 0, -1)
+	nextLabel:SetTextColor(MUTED[1], MUTED[2], MUTED[3], 0.70)
+	nextLabel:SetText("NEXT")
+
+	local chevron = frame:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+	chevron:SetPoint("RIGHT", nextFrame, "LEFT", -6, 0)
+	chevron:SetTextColor(GOLD[1], GOLD[2], GOLD[3], 0.45)
+	chevron:SetText(">")
+	chevron:Hide()
+
 	local label = frame:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
-	label:SetPoint("TOPLEFT", main, "TOPRIGHT", 10, -5)
-	label:SetWidth(134)
+	label:SetPoint("LEFT", dial, "RIGHT", T.GAP, -4)
+	label:SetPoint("RIGHT", nextFrame, "LEFT", -18, -4)
 	label:SetJustifyH("LEFT")
 	label:SetWordWrap(false)
 	label:SetTextColor(IVORY[1], IVORY[2], IVORY[3])
@@ -325,47 +319,53 @@ function UI:Build()
 	label:SetText("")
 
 	local status = frame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-	status:SetPoint("TOPLEFT", label, "BOTTOMLEFT", 0, -4)
-	status:SetWidth(134)
+	status:SetPoint("TOPLEFT", label, "BOTTOMLEFT", 0, -2)
+	status:SetPoint("RIGHT", nextFrame, "LEFT", -18, 0)
 	status:SetJustifyH("LEFT")
 	status:SetWordWrap(false)
 	status:SetTextColor(GOLD[1], GOLD[2], GOLD[3])
 	status:SetText("")
 
-	-- Subtle flow chevron between current action and NEXT
-	local chevron = frame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-	chevron:SetPoint("RIGHT", frame, "BOTTOMRIGHT", -46, 33)
-	chevron:SetTextColor(GOLD[1], GOLD[2], GOLD[3], 0.45)
-	chevron:SetText(">")
-	chevron:Hide()
+	pipRow:SetPoint("BOTTOMLEFT", label, "TOPLEFT", 0, 4)
 
-	-- Next action
-	local nextFrame = CreateFrame("Frame", nil, frame)
-	SetPixelSize(nextFrame, NEXT_SIZE, NEXT_SIZE)
-	nextFrame:SetPoint("BOTTOMRIGHT", -10, 18)
+	-- Bottom rails inset from the border (StatusBar — Forever-safe; no circular Cooldown mask).
+	local swingBar = CreateFrame("StatusBar", nil, frame)
+	SetPixelHeight(swingBar, T.SWING_H)
+	swingBar:SetPoint("BOTTOMLEFT", frame, "BOTTOMLEFT", 2, 5)
+	swingBar:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", -2, 5)
+	swingBar:SetStatusBarTexture(T.SOLID)
+	swingBar:SetStatusBarColor(GOLD[1], GOLD[2], GOLD[3], 0.90)
+	swingBar:SetMinMaxValues(0, 1)
+	swingBar:SetValue(0)
+	swingBar:Hide()
 
-	local nextBorder = nextFrame:CreateTexture(nil, "BACKGROUND")
-	nextBorder:SetPoint("TOPLEFT", -1, 1)
-	nextBorder:SetPoint("BOTTOMRIGHT", 1, -1)
-	nextBorder:SetColorTexture(GOLD[1], GOLD[2], GOLD[3], 0.32)
+	local swingTrack = swingBar:CreateTexture(nil, "BACKGROUND")
+	swingTrack:SetAllPoints()
+	swingTrack:SetColorTexture(1, 1, 1, 0.06)
 
-	local nextIcon = nextFrame:CreateTexture(nil, "ARTWORK")
-	nextIcon:SetAllPoints()
-	nextIcon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
-	nextIcon:SetAlpha(0.88)
+	-- Alias for tests that still look for the dial-era name.
+	local swingRing = swingBar
 
-	local nextKeyHolder, nextKey = CreateKeybindPill(nextFrame)
+	local manaBar = CreateFrame("StatusBar", nil, frame)
+	SetPixelHeight(manaBar, T.MANA_H)
+	manaBar:SetPoint("BOTTOMLEFT", frame, "BOTTOMLEFT", 2, 2)
+	manaBar:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", -2, 2)
+	manaBar:SetStatusBarTexture(T.SOLID)
+	manaBar:SetStatusBarColor(T.MANA[1], T.MANA[2], T.MANA[3], 0.85)
+	manaBar:SetMinMaxValues(0, 1)
+	manaBar:SetValue(1)
 
-	local nextLabel = frame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-	nextLabel:SetPoint("TOP", nextFrame, "BOTTOM", 0, -3)
-	nextLabel:SetTextColor(MUTED[1], MUTED[2], MUTED[3], 0.7)
-	nextLabel:SetText("NEXT")
+	local manaTrack = manaBar:CreateTexture(nil, "BACKGROUND")
+	manaTrack:SetAllPoints()
+	manaTrack:SetColorTexture(1, 1, 1, 0.06)
 
 	self.frame = frame
 	local okClick, errClick = pcall(self.BuildClickCast, self, frame, main, cooldown)
 	if not okClick then ns:RecordError("BuildClickCast", errClick) end
 	self.caption = caption
 	self.accent = accent
+	self.dial = dial
+	self.pipRow = pipRow
 	self.pips = pips
 	self.echoBar = echoBar
 	self.echoText = echoText
@@ -376,8 +376,9 @@ function UI:Build()
 	self.mainKeyHolder = mainKeyHolder
 	self.mainKey = mainKey
 	self.cooldown = cooldown
+	self.swingRing = swingRing
 	self.swingBar = swingBar
-	self.swingTick = swingTick
+	self.swingTick = nil
 	self.manaBar = manaBar
 	self.glow = glow
 	self.status = status
@@ -388,6 +389,9 @@ function UI:Build()
 	self.nextKey = nextKey
 	self.nextFrame = nextFrame
 	self.nextLabel = nextLabel
+	self.nextBorder = nextBorder
+
+	self:LayoutMidband()
 
 	local fx = ns:GetModule("FX")
 	if fx then fx:Attach(main, MAIN_SIZE) end
@@ -395,6 +399,7 @@ function UI:Build()
 	self.lastMainTexture = false
 	self.lastNextTexture = false
 	self.lastRefresh = 0
+	self.lastSwingStart = nil
 	frame:SetScript("OnUpdate", function(_, elapsed)
 		self:StepAnimations(elapsed)
 
@@ -427,11 +432,32 @@ function UI:TriggerSpellPop()
 	self.flashTime = FLASH_DURATION
 end
 
+function UI:UpdateSwingRing(tracker, inCombat)
+	local swingBar = self.swingBar or self.swingRing
+	if not swingBar then return end
+
+	local progress = inCombat and tracker and tracker:GetSwingProgress() or nil
+	local known = tracker and tracker.swingKnown
+
+	if inCombat and known and progress ~= nil then
+		swingBar:SetMinMaxValues(0, 1)
+		swingBar:SetValue(progress)
+		if tracker:IsSwingWindowOpen(1.5) then
+			swingBar:SetStatusBarColor(GOLD[1], GOLD[2], GOLD[3], 0.95)
+		else
+			swingBar:SetStatusBarColor(WARN[1], WARN[2], WARN[3], 0.85)
+		end
+		swingBar:Show()
+	else
+		swingBar:SetValue(0)
+		swingBar:Hide()
+	end
+end
+
 function UI:StepAnimations(elapsed)
 	local dt = elapsed or 0
 	self:StepFade(dt)
 
-	-- Smooth spell-change scale pop & flash
 	if self.popTime and self.popTime > 0 then
 		self.popTime = math.max(0, self.popTime - dt)
 		local t = self.popTime / POP_DURATION
@@ -450,7 +476,6 @@ function UI:StepAnimations(elapsed)
 		self.flash:SetColorTexture(1, 0.95, 0.78, 0)
 	end
 
-	-- Smooth 60 FPS echo pip alpha transitions
 	local targetEchoes = self.targetEchoes or 0
 	if self.pips and self.trackerVisible then
 		for i = 1, 3 do
@@ -465,32 +490,11 @@ function UI:StepAnimations(elapsed)
 		end
 	end
 
-	-- 60 FPS smooth swing bar and echo decay bar
 	local tracker = ns:GetModule("CombatTracker")
 	if not tracker then return end
 
 	local inCombat = self.combatFlag == true or InCombatLockdown()
-	local swingProgress = inCombat and tracker:GetSwingProgress() or nil
-	if swingProgress ~= nil and self.swingBar then
-		self.swingBar:SetValue(swingProgress)
-		if not self.swingBar:IsShown() then self.swingBar:Show() end
-
-		local dur = tracker.swingDuration
-		if dur and dur > 1.5 and self.swingTick then
-			local barWidth = self.swingBar:GetWidth()
-			if barWidth and barWidth > 10 then
-				local frac = 1 - (1.5 / dur)
-				self.swingTick:SetPoint("CENTER", self.swingBar, "LEFT", barWidth * frac, 0)
-				self.swingTick:Show()
-			end
-		elseif self.swingTick then
-			self.swingTick:Hide()
-		end
-	elseif self.swingBar and self.swingBar:IsShown() then
-		self.swingBar:SetValue(0)
-		self.swingBar:Hide()
-		if self.swingTick then self.swingTick:Hide() end
-	end
+	self:UpdateSwingRing(tracker, inCombat)
 
 	if self.trackerVisible and self.echoBar then
 		local remaining = tracker:GetEchoRemaining()
@@ -561,13 +565,12 @@ function UI:SetTrackerVisible(visible)
 	for _, pip in ipairs(self.pips) do
 		pip:SetShown(visible)
 	end
+	if self.pipRow then self.pipRow:SetShown(visible) end
 	self.echoBar:SetShown(visible)
 	self.echoText:SetShown(visible)
 
-	-- Without echoes the widget collapses: no dead space above the icon.
 	SetPixelHeight(self.frame, visible and PANEL_H or PANEL_H_COMPACT)
-	self.main:ClearAllPoints()
-	self.main:SetPoint("BOTTOMLEFT", 10, visible and 11 or 10)
+	self:LayoutMidband()
 end
 
 function UI:Refresh()
@@ -593,21 +596,15 @@ function UI:ShouldBeVisible(db, inCombat, hasHostile, placing)
 	if vis == "target" then return inCombat or hasHostile end
 	if vis == "combat" then return inCombat end
 
-	-- Fallback for any unmigrated profile
 	if db.combatOnly ~= false then return inCombat end
 	return db.showOutOfCombat or inCombat or hasHostile
 end
 
--- Click-to-cast: a secure button over the main icon. Secure attributes cannot
--- change in combat, so the button is hidden by a state driver while in combat
--- (the HUD stays informative only) and re-armed out of combat.
 function UI:BuildClickCast(frame, main, cooldown)
 	local ok, btn = pcall(CreateFrame, "Button", nil, main, "SecureActionButtonTemplate")
 	if not ok or not btn then return end
 	btn:SetAllPoints(main)
 	btn:SetFrameLevel(cooldown:GetFrameLevel() + 4)
-	-- Register both edges: with the ActionButtonUseKeyDown CVar on, the secure
-	-- handler only fires on the down edge and ignores an up-only registration.
 	btn:RegisterForClicks("LeftButtonDown", "LeftButtonUp")
 	btn:RegisterForDrag("LeftButton")
 	btn:HookScript("OnDragStart", function()
@@ -671,7 +668,6 @@ function UI:RefreshInner()
 	local missingBlessing = (not inCombat) and tracker and tracker.GetMissingBlessing and tracker:GetMissingBlessing() or nil
 	local missingAura = (not inCombat) and tracker and tracker.GetMissingAura and tracker:GetMissingAura() or nil
 
-	-- Unlocking reveals the HUD for a minute so it can be dragged even in combat-only mode.
 	local placing = (not db.locked) and GetTime() < (self.revealUntil or 0)
 	local hasReminder = (missingBlessing ~= nil) or (missingAura ~= nil)
 	local visible = self:ShouldBeVisible(db, inCombat, hasHostile, placing) or hasReminder
@@ -689,7 +685,7 @@ function UI:RefreshInner()
 			self.caption:SetTextColor(READY[1], READY[2], READY[3], 0.9)
 		else
 			self.caption:SetText("RETPULSE")
-			self.caption:SetTextColor(GOLD[1], GOLD[2], GOLD[3], 0.45)
+			self.caption:SetTextColor(GOLD[1], GOLD[2], GOLD[3], 0.40)
 		end
 	end
 
@@ -708,10 +704,9 @@ function UI:RefreshInner()
 		current = missingAura
 	end
 
-	-- With no hostile target the panel falls back to the active seal instead of
-	-- an anonymous shield, so the HUD keeps telling you something useful.
 	local displayName = current
-	self:UpdateClickCast(current)	if not displayName and not queue.hasTarget then
+	self:UpdateClickCast(current)
+	if not displayName and not queue.hasTarget then
 		displayName = tracker:GetActiveSeal()
 	end
 
@@ -735,7 +730,6 @@ function UI:RefreshInner()
 		self.chevron:SetShown(hasNext)
 	end
 
-	-- Keybind pills
 	local showKeys = db.showKeybinds ~= false and keybinds ~= nil
 	local mainKeyText = (showKeys and current) and (keybinds:GetForSpell(current) or "") or ""
 	if self.lastMainKey ~= mainKeyText then
@@ -748,7 +742,6 @@ function UI:RefreshInner()
 		UpdateKeybindPill(self.nextKeyHolder, self.nextKey, nextKeyText)
 	end
 
-	-- Tracker row visibility
 	local trackerOn = (engine and engine.hasUnsealedWrath) or (db.twistWithoutTalent == true)
 	self:SetTrackerVisible(trackerOn and true or false)
 
@@ -760,7 +753,6 @@ function UI:RefreshInner()
 	local ready = queue:IsTwistReady(trackerOn)
 	local warnSeal = activeSeal ~= nil and sealLeft ~= nil and sealLeft <= 3
 
-	-- Main spell title & clean secondary status line
 	if current then
 		self.label:SetText(SpellName(current))
 	elseif displayName then
@@ -838,7 +830,6 @@ function UI:RefreshInner()
 		self.mainIcon:SetVertexColor(1, 1, 1, 1)
 	end
 
-	-- Echo text & color (bar value itself updates at 60 FPS in StepAnimations)
 	local maxEchoes = tracker:GetMaxEchoes()
 	local remaining = tracker:GetEchoRemaining()
 	local duration = tracker:GetEchoDuration()
@@ -849,9 +840,6 @@ function UI:RefreshInner()
 		self.echoText:SetText(string.format("%d/%d", echoes, maxEchoes))
 	end
 
-	-- Spell cooldown / GCD swipe: prefer the server's exact LuaDurationObject
-	-- (C_Spell.GetSpellCooldownDuration -> SetCooldownFromDurationObject),
-	-- falling back to the local cooldown clock when unavailable.
 	local appliedDurationObj = false
 	if current and C_Spell and C_Spell.GetSpellCooldownDuration and self.cooldown.SetCooldownFromDurationObject then
 		local okDur, durObj = pcall(C_Spell.GetSpellCooldownDuration, current, false)
@@ -888,23 +876,8 @@ function UI:RefreshInner()
 		end
 	end
 
-	-- Swing bar color & immediate visibility sync (value animates at 60 FPS in StepAnimations)
-	local swingProgress = inCombat and tracker:GetSwingProgress() or nil
-	if swingProgress ~= nil then
-		self.swingBar:SetValue(swingProgress)
-		if tracker:IsSwingWindowOpen(1.5) then
-			self.swingBar:SetStatusBarColor(GOLD[1], GOLD[2], GOLD[3], 0.9)
-		else
-			self.swingBar:SetStatusBarColor(WARN[1], WARN[2], WARN[3], 0.8)
-		end
-		self.swingBar:Show()
-	else
-		self.swingBar:SetValue(0)
-		self.swingBar:Hide()
-		self.swingTick:Hide()
-	end
+	self:UpdateSwingRing(tracker, inCombat)
 
-	-- One click on the transition into SWAP NOW, not every frame.
 	if ready and not self.wasReady and db.sound ~= false then
 		local kit = SOUNDKIT and SOUNDKIT.IG_MAINMENU_OPTION_CHECKBOX_ON
 		if kit then pcall(PlaySound, kit) end
@@ -913,7 +886,6 @@ function UI:RefreshInner()
 
 	local fx = ns:GetModule("FX")
 	if fx then
-		-- Effects live only while something is happening: no pulsing HUD in town.
 		fx:SetVisible(inCombat or hasHostile)
 		if ready then
 			fx:SetState("ready")
@@ -928,7 +900,6 @@ function UI:RefreshInner()
 	end
 	self.lastEchoes = echoes
 
-	-- Visual alert state: border & accent update on state change; glow pulses smoothly.
 	local phase = math.abs(math.sin(GetTime() * 4))
 	local visualState = ready and "ready" or (warnSeal and "warn" or "idle")
 	if self.lastVisualState ~= visualState then
@@ -944,16 +915,16 @@ function UI:RefreshInner()
 		else
 			self.frame:SetBackdropBorderColor(GOLD_DIM[1], GOLD_DIM[2], GOLD_DIM[3], GOLD_DIM[4])
 			self.accent:SetColorTexture(GOLD[1], GOLD[2], GOLD[3], 0.80)
-			self.mainBorder:SetColorTexture(GOLD[1], GOLD[2], GOLD[3], 0.72)
+			self.mainBorder:SetColorTexture(GOLD[1], GOLD[2], GOLD[3], 0.85)
 		end
 	end
 
 	if visualState == "ready" then
-		self.glow:SetColorTexture(READY[1], READY[2], READY[3], 0.12 + 0.24 * phase)
+		self.glow:SetVertexColor(READY[1], READY[2], READY[3], 0.16 + 0.24 * phase)
 	elseif visualState == "warn" then
-		self.glow:SetColorTexture(1.0, 0.45, 0.15, 0.08 + 0.18 * phase)
+		self.glow:SetVertexColor(1.0, 0.45, 0.15, 0.10 + 0.18 * phase)
 	else
-		self.glow:SetColorTexture(GOLD[1], GOLD[2], GOLD[3], 0.04 + 0.05 * phase)
+		self.glow:SetVertexColor(GOLD[1], GOLD[2], GOLD[3], 0.05 + 0.07 * phase)
 	end
 end
 
@@ -998,19 +969,16 @@ end
 function UI:DebugLine()
 	local db = ns.db or {}
 	local placing = (not db.locked) and GetTime() < (self.revealUntil or 0)
-	return string.format("ui shown=%s vis=%s combatFlag=%s locked=%s placing=%s reveal=%.0f scale=%.2f h=%d",
+	return string.format("ui shown=%s vis=%s combatFlag=%s locked=%s placing=%s reveal=%.0f scale=%.2f h=%d plate=1",
 		tostring(self.frame and self.frame:IsShown()), tostring(db.visibility),
 		tostring(self.combatFlag), tostring(db.locked),
 		tostring(placing), (self.revealUntil or 0) - GetTime(),
 		db.scale or 1, math.floor((self.frame and self.frame:GetHeight()) or 0))
 end
 
--- Thin call-throughs so slash commands and the options panel stay decoupled
--- from the UI module name.
 function ns.SetLocked(locked)
 	local ui = ns:GetModule("UI")
 	if not locked and ui then
-		-- Reveal the HUD for a minute so it can be dragged, even in combat-only mode.
 		ui.revealUntil = GetTime() + 60
 	elseif locked and ui then
 		ui.revealUntil = 0
