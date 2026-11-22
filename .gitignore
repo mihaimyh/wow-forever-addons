@@ -12,3 +12,8 @@ Thumbs.db
 
 # MCP server dependencies
 mcp-server/node_modules/
+
+# Local secrets & build artifacts
+.env
+.env.local
+dist/
