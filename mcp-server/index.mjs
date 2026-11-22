@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
@@ -383,6 +384,73 @@ server.tool(
         },
       ],
     };
+  }
+);
+
+// 7. capture_wow_screenshot
+server.tool(
+  "capture_wow_screenshot",
+  "Capture a read-only Windows desktop screenshot of the World of Warcraft game window to a PNG file for visual addon debugging.",
+  {
+    outputPath: z.string().optional().describe("Optional absolute PNG path; defaults to temp folder"),
+  },
+  async ({ outputPath }) => {
+    if (process.platform !== "win32") {
+      return { content: [{ type: "text", text: "capture_wow_screenshot is only supported on Windows." }] };
+    }
+    const targetPath = outputPath || path.join(os.tmpdir(), "wow-forever-mcp-screenshot.png");
+    const psScript = `
+Add-Type -AssemblyName System.Drawing
+Add-Type -AssemblyName System.Windows.Forms
+Add-Type @"
+using System;
+using System.Runtime.InteropServices;
+public class WinRectHelper {
+  [StructLayout(LayoutKind.Sequential)]
+  public struct RECT { public int Left; public int Top; public int Right; public int Bottom; }
+  [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr hWnd, out RECT lpRect);
+  [DllImport("user32.dll", CharSet=CharSet.Unicode)] public static extern IntPtr FindWindow(string lpClassName, string lpWindowName);
+}
+"@
+$hwnd = [WinRectHelper]::FindWindow("GxWindowClass", $null)
+if ($hwnd -eq [IntPtr]::Zero) { $hwnd = [WinRectHelper]::FindWindow($null, "World of Warcraft") }
+if ($hwnd -eq [IntPtr]::Zero) {
+  $proc = Get-Process | Where-Object { $_.MainWindowHandle -ne 0 -and ($_.ProcessName -match '^Wow' -or $_.MainWindowTitle -like '*World of Warcraft*') } | Select-Object -First 1
+  if ($proc) { $hwnd = $proc.MainWindowHandle }
+}
+$mode = "window"
+$left = 0; $top = 0; $w = 0; $h = 0
+if ($hwnd -ne [IntPtr]::Zero) {
+  $rect = New-Object WinRectHelper+RECT
+  [WinRectHelper]::GetWindowRect($hwnd, [ref]$rect) | Out-Null
+  $left = $rect.Left; $top = $rect.Top
+  $w = $rect.Right - $rect.Left; $h = $rect.Bottom - $rect.Top
+}
+if ($w -lt 100 -or $h -lt 100) {
+  $mode = "primary_screen"
+  $bounds = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
+  $left = $bounds.X; $top = $bounds.Y; $w = $bounds.Width; $h = $bounds.Height
+}
+$bmp = New-Object System.Drawing.Bitmap($w, $h)
+$gfx = [System.Drawing.Graphics]::FromImage($bmp)
+$gfx.CopyFromScreen($left, $top, 0, 0, $bmp.Size)
+$outPath = '${targetPath.replace(/'/g, "''")}'
+$bmp.Save($outPath, [System.Drawing.Imaging.ImageFormat]::Png)
+$gfx.Dispose()
+$bmp.Dispose()
+[PSCustomObject]@{ path = $outPath; width = $w; height = $h; mode = $mode } | ConvertTo-Json -Compress
+`;
+    try {
+      const stdout = execFileSync("powershell.exe", ["-NoProfile", "-Command", psScript], {
+        encoding: "utf8",
+        timeout: 15000,
+      }).trim();
+      return { content: [{ type: "text", text: stdout }] };
+    } catch (err) {
+      return {
+        content: [{ type: "text", text: `Screenshot failed: ${(err.stderr || err.message || "").toString().trim()}` }],
+      };
+    }
   }
 );
 

@@ -290,6 +290,7 @@ function CombatTracker:RefreshSeal()
 	local foundSeal = false
 	local foundAura = false
 	local foundBlessings = {}
+	local foundOwnBlessings = {}
 	for i = 1, 40 do
 		local ok, aura = pcall(C_UnitAuras.GetAuraDataByIndex, "player", i, "HELPFUL")
 		if not ok or not aura then break end
@@ -299,6 +300,10 @@ function CombatTracker:RefreshSeal()
 			sawReadable = true
 			if self:IsBlessingName(name) then
 				foundBlessings[name] = true
+				local src = aura.sourceUnit
+				if src ~= nil and not ns.IsSecret(src) and src == "player" then
+					foundOwnBlessings[name] = true
+				end
 			elseif self:IsAuraName(name) then
 				foundAura = true
 			elseif not foundSeal and self:IsSealName(name) then
@@ -320,6 +325,7 @@ function CombatTracker:RefreshSeal()
 	-- Out of combat we scanned the full player buff list: update blessings & aura state.
 	if not InCombatLockdown() then
 		self.activeBlessings = foundBlessings
+		self.ownBlessings = foundOwnBlessings
 		self.hasActiveAura = foundAura
 		if not foundSeal and sawReadable then
 			self.activeSeal = nil
@@ -344,7 +350,9 @@ function CombatTracker:OnSpellCast(spellID)
 	end
 	if self:IsBlessingName(name) then
 		self.activeBlessings = self.activeBlessings or {}
+		self.ownBlessings = self.ownBlessings or {}
 		self.activeBlessings[name] = true
+		self.ownBlessings[name] = true
 		return
 	end
 	if not self:IsSealName(name) then return end
@@ -391,17 +399,20 @@ function CombatTracker:GetMissingBlessing()
 	if pref == "off" then return nil end
 
 	local active = self.activeBlessings or {}
+	local own = self.ownBlessings or {}
 
 	if pref == "auto" then
-		-- Satisfied if any Blessing (or Greater Blessing) is already on the player.
-		for _ in pairs(active) do return nil end
+		-- Satisfied only once YOU have your own Blessing active on yourself.
+		-- Another Paladin's Blessing (e.g. Wisdom) does not block your own Kings/Might,
+		-- and we skip whichever Blessing another Paladin already gave you.
+		for _ in pairs(own) do return nil end
 		local order = {
 			ns.SPELLS.BLESSING_KINGS,
 			ns.SPELLS.BLESSING_MIGHT,
 			ns.SPELLS.BLESSING_WISDOM,
 		}
 		for _, spellName in ipairs(order) do
-			if IsSpellKnownByName(spellName) then
+			if IsSpellKnownByName(spellName) and not active[spellName] and not active["Greater " .. spellName] then
 				return spellName
 			end
 		end

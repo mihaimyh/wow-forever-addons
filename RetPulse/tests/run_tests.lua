@@ -1295,8 +1295,8 @@ Test("27. Missing Blessing reminder surfaces Blessing of Kings out of combat and
 	AssertEq(ui.label:GetText(), "Blessing of Kings", "HUD should show Blessing of Kings")
 	AssertEq(ui.status:GetText(), "BUFF MISSING", "HUD status should show BUFF MISSING")
 
-	-- Buff applied -> reminder clears and HUD fades out
-	c.SetPlayerAuras({ { name = "Blessing of Kings", spellId = 20217, expirationTime = 4600 } })
+	-- Buff applied by player -> reminder clears and HUD fades out
+	c.SetPlayerAuras({ { name = "Blessing of Kings", spellId = 20217, sourceUnit = "player", expirationTime = 4600 } })
 	c.Fire("UNIT_AURA", "player")
 	AssertEq(tracker:GetMissingBlessing(), nil, "Missing blessing should clear once Blessing of Kings is active")
 	ui:Refresh()
@@ -1319,7 +1319,7 @@ Test("28. Missing Paladin Aura reminder surfaces Retribution Aura out of combat 
 			["Blessing of Kings"] = true,
 		},
 		playerAuras = {
-			{ name = "Blessing of Kings", spellId = 20217, expirationTime = 4600 },
+			{ name = "Blessing of Kings", spellId = 20217, sourceUnit = "player", expirationTime = 4600 },
 		},
 	})
 	local tracker = c.ns:GetModule("CombatTracker")
@@ -1334,14 +1334,52 @@ Test("28. Missing Paladin Aura reminder surfaces Retribution Aura out of combat 
 
 	-- Any Aura active (e.g. Devotion Aura) -> reminder clears
 	c.SetPlayerAuras({
-		{ name = "Blessing of Kings", spellId = 20217, expirationTime = 4600 },
-		{ name = "Devotion Aura", spellId = 465, expirationTime = 0 },
+		{ name = "Blessing of Kings", spellId = 20217, sourceUnit = "player", expirationTime = 4600 },
+		{ name = "Devotion Aura", spellId = 465, sourceUnit = "player", expirationTime = 0 },
 	})
 	c.Fire("UNIT_AURA", "player")
 	AssertEq(tracker:GetMissingAura(), nil, "Any active Paladin Aura should satisfy the reminder")
 	ui:Refresh()
 	ui:StepFade(1.0)
 	AssertEq(ui.frame:IsShown(), false, "HUD should hide once both Blessing and Aura are active")
+end)
+
+Test("29. Another Paladin's Blessing of Wisdom does not suppress your own Blessing reminder", function()
+	local c = CreateEnv({
+		inCombat = false,
+		targetExists = false,
+		knownSpells = {
+			["Blessing of Kings"] = 20217,
+			["Blessing of Might"] = 19834,
+			["Blessing of Wisdom"] = 19850,
+		},
+		usableSpells = {
+			["Blessing of Kings"] = true,
+			["Blessing of Might"] = true,
+			["Blessing of Wisdom"] = true,
+		},
+		playerAuras = {
+			-- Buffed by another Paladin, NOT by player!
+			{ name = "Blessing of Wisdom", spellId = 19850, sourceUnit = "party1", expirationTime = 4600 },
+		},
+	})
+	local tracker = c.ns:GetModule("CombatTracker")
+	AssertEq(tracker:GetMissingBlessing(), "Blessing of Kings", "Should still suggest your own Blessing (Kings) when only another Paladin's Wisdom is up")
+
+	-- If another Paladin gave Kings, suggest Might instead (don't overwrite Kings!)
+	c.SetPlayerAuras({
+		{ name = "Blessing of Kings", spellId = 20217, sourceUnit = "party1", expirationTime = 4600 },
+	})
+	c.Fire("UNIT_AURA", "player")
+	AssertEq(tracker:GetMissingBlessing(), "Blessing of Might", "Should skip Kings from another Paladin and suggest Might")
+
+	-- Once player casts their own Might -> reminder clears
+	c.SetPlayerAuras({
+		{ name = "Blessing of Kings", spellId = 20217, sourceUnit = "party1", expirationTime = 4600 },
+		{ name = "Blessing of Might", spellId = 19834, sourceUnit = "player", expirationTime = 4600 },
+	})
+	c.Fire("UNIT_AURA", "player")
+	AssertEq(tracker:GetMissingBlessing(), nil, "Reminder clears once player has their own Blessing active")
 end)
 
 print(string.format("\nResults: %d passed, %d failed", passed, failed))
