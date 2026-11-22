@@ -93,7 +93,12 @@ function Talents:TryHook()
 
 	self.hooked = true
 	PlayerSpellsFrame.TalentsFrame:HookScript("OnShow", function()
-		self:RefreshOverlay()
+		-- Defer one frame so nodeIDToButton is populated after Camelot tree load.
+		if C_Timer and C_Timer.After then
+			C_Timer.After(0, function() self:RefreshOverlay() end)
+		else
+			self:RefreshOverlay()
+		end
 	end)
 	PlayerSpellsFrame.TalentsFrame:HookScript("OnHide", function()
 		self:ClearOverlays()
@@ -150,9 +155,16 @@ local function ResolveButtonTalentName(configID, button)
 	if not okE or type(entryInfo) ~= "table" or not entryInfo.definitionID then return nil end
 
 	local okD, defInfo = pcall(C_Traits.GetDefinitionInfo, entryInfo.definitionID)
-	if not okD or type(defInfo) ~= "table" or not defInfo.spellID then return nil end
+	if not okD or type(defInfo) ~= "table" then return nil end
 
-	if C_Spell and C_Spell.GetSpellInfo then
+	-- Match Blizzard TalentUtil.GetTalentName: overrideName wins over spell name.
+	if type(defInfo.overrideName) == "string" and defInfo.overrideName ~= "" and not ns.IsSecret(defInfo.overrideName) then
+		return defInfo.overrideName
+	end
+	if defInfo.spellID and ns.GetSpellNameByID then
+		return ns.GetSpellNameByID(defInfo.spellID)
+	end
+	if defInfo.spellID and C_Spell and C_Spell.GetSpellInfo then
 		local okS, spellInfo = pcall(C_Spell.GetSpellInfo, defInfo.spellID)
 		if okS and type(spellInfo) == "table" and type(spellInfo.name) == "string" and not ns.IsSecret(spellInfo.name) then
 			return spellInfo.name
@@ -162,15 +174,28 @@ local function ResolveButtonTalentName(configID, button)
 end
 
 function Talents:EnsureOverlayRoot(talentsFrame)
+	-- Parent under TalentsFrame (not UIParent): UIParent siblings sit behind the
+	-- PlayerSpells UIPanel, which made RP NEXT / RP X/Y badges invisible after
+	-- the anti-taint isolation change. Stay off the individual talent buttons to
+	-- avoid SetParent taint; Zygor's menu button uses the same TalentsFrame parent.
+	if not talentsFrame then return self.overlayRoot end
+
 	if not self.overlayRoot then
-		local root = CreateFrame("Frame", nil, UIParent)
-		root:SetAllPoints(UIParent)
+		local root = CreateFrame("Frame", nil, talentsFrame)
 		self.overlayRoot = root
+	elseif self.overlayRoot.SetParent then
+		local okP = pcall(self.overlayRoot.SetParent, self.overlayRoot, talentsFrame)
+		if not okP then return self.overlayRoot end
 	end
-	if talentsFrame and talentsFrame.GetFrameStrata and self.overlayRoot.SetFrameStrata then
-		local okS, strata = pcall(talentsFrame.GetFrameStrata, talentsFrame)
-		if okS and strata then self.overlayRoot:SetFrameStrata(strata) end
+
+	self.overlayRoot:ClearAllPoints()
+	self.overlayRoot:SetAllPoints(talentsFrame)
+	local baseLevel = 10
+	if type(talentsFrame.GetFrameLevel) == "function" then
+		local okL, level = pcall(talentsFrame.GetFrameLevel, talentsFrame)
+		if okL and type(level) == "number" then baseLevel = level end
 	end
+	self.overlayRoot:SetFrameLevel(baseLevel + 50)
 	self.overlayRoot:Show()
 	return self.overlayRoot
 end

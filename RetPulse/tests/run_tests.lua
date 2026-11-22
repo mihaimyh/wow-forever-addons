@@ -178,6 +178,10 @@ local function CreateEnv(opts)
 		function f:HookScript(name, fn) self._scripts["hook_" .. name] = fn end
 		function f:SetAttribute(k, v) self._attrs = self._attrs or {}; self._attrs[k] = v end
 		function f:GetAttribute(k) return self._attrs and self._attrs[k] end
+		function f:SetParent(p) self._parent = p end
+		function f:GetParent() return self._parent end
+		function f:GetFrameStrata() return self._strata or "MEDIUM" end
+		function f:SetFrameStrata(s) self._strata = s end
 		function f:GetChildren() return table.unpack(self._children) end
 		registeredFrames[#registeredFrames + 1] = f
 		return f
@@ -206,7 +210,14 @@ local function CreateEnv(opts)
 	function env.IsInInstance() return false end
 	function env.issecretvalue(v) return IsSecretValue(v) end
 	function env.issecrettable(v) return IsSecretValue(v) end
-	function env.CreateFrame(ft) return MakeFrame(ft) end
+	function env.CreateFrame(ft, _name, parent, _template)
+		local f = MakeFrame(ft)
+		f._parent = parent
+		if parent and parent._children then
+			parent._children[#parent._children + 1] = f
+		end
+		return f
+	end
 	function env.PlaySound() end
 	function env.UnitClass() return "Paladin", playerClass, 2 end
 	function env.UnitLevel() return opts.playerLevel or 20 end
@@ -1250,6 +1261,42 @@ Test("25. TalentAdvisor attaches RP NEXT badge on PlayerSpellsFrame.TalentsFrame
 	AssertEq(overlayPlanned.badgeText:GetText(), "RP 0/2", "Planned talent badge must show 'RP 0/2'")
 	Assert(overlayDone ~= nil, "Should attach RP checkmark overlay to completed talent in build")
 	Assert(overlayDone.badgeText:GetText():find("ReadyCheck%-Ready") ~= nil, "Completed badge must render WoW native checkmark icon")
+end)
+
+Test("25b. TalentAdvisor overlays stay parented under TalentsFrame (not UIParent) so badges stay visible", function()
+	-- Regression guard for 3681140: parenting badges to UIParent puts them behind
+	-- PlayerSpellsFrame, so leveling/DPS recommendations vanish even though the plan
+	-- still computes correctly.
+	local c = CreateEnv({})
+	local talents = c.ns:GetModule("Talents")
+
+	local btnBenediction = c.MakeFrame("Button")
+	btnBenediction.nodeInfo = { ranksPurchased = 0, maxRanks = 5, entryIDs = { 101 } }
+	btnBenediction._level = 120
+
+	local talentsFrame = c.MakeFrame("Frame")
+	talentsFrame._shown = true
+	talentsFrame._level = 100
+	talentsFrame.IsVisible = function() return true end
+	talentsFrame.configurationInfo = { ID = 1 }
+	talentsFrame.nodeIDToButton = { [1] = btnBenediction }
+	c.env.PlayerSpellsFrame = { TalentsFrame = talentsFrame }
+
+	c.env.C_Traits = {
+		GetEntryInfo = function(_, entryID) return { definitionID = entryID } end,
+		GetDefinitionInfo = function() return { spellID = 9001 } end,
+	}
+	c.env.C_Spell.GetSpellInfo = function(id)
+		if id == 9001 then return { name = "Benediction" } end
+		return nil
+	end
+
+	talents:RefreshOverlay()
+	Assert(talents.overlayRoot ~= nil, "Overlay root must exist after refresh")
+	AssertEq(talents.overlayRoot:GetParent(), talentsFrame, "Overlay root must be parented to TalentsFrame, not UIParent")
+	Assert(talents.overlayRoot ~= c.env.UIParent, "Overlay root must not be UIParent itself")
+	Assert(talents.activeOverlays["Benediction"] ~= nil, "RP NEXT badge must still attach")
+	AssertEq(talents.activeOverlays["Benediction"]:GetParent(), talents.overlayRoot, "Badge frames live under the TalentsFrame overlay root")
 end)
 
 Test("26. Passive out-of-combat seal display dims icon and shows 'Active' status", function()
