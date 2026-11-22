@@ -26,6 +26,7 @@ local function CreateEnv(opts)
 	local inCombat = opts.inCombat or false
 	local playerClass = opts.playerClass or "PALADIN"
 	local weaponSpeed = opts.weaponSpeed or 2.87
+	local meleeHaste = opts.meleeHaste or 0
 	local weaponSpeedSecret = opts.weaponSpeedSecret or false
 	local weaponItemID = opts.weaponItemID or 279864
 	local targetExists = opts.targetExists ~= false
@@ -257,6 +258,10 @@ local function CreateEnv(opts)
 	function env.UnitAttackSpeed()
 		if weaponSpeedSecret then return MakeSecret(weaponSpeed) end
 		return weaponSpeed
+	end
+	function env.GetMeleeHaste()
+		if weaponSpeedSecret then return MakeSecret(meleeHaste) end
+		return meleeHaste
 	end
 	function env.GetActionInfo(slot)
 		local entry = actionSlots[slot]
@@ -1483,6 +1488,28 @@ Test("32. Learned cooldowns persist in RetPulseDB and reset on talent or gear ch
 	-- Gear swap (e.g. unequipping a set bonus) resets learned cooldowns
 	c2.Fire("PLAYER_EQUIPMENT_CHANGED")
 	AssertEq(c2.ns.db.learnedCooldowns["Judgement"], nil, "Equipment change should clear learned cooldowns")
+end)
+
+Test("33. WeaponEngine strips melee haste to classify base weapon speed (e.g. 3.30s sword under 15% Warchief's Blessing)", function()
+	local c = CreateEnv({
+		weaponSpeed = 3.30 / 1.15, -- ~2.8696s hasted attack speed
+		meleeHaste = 15,
+		knownSpells = {
+			["Judgement"] = 20271,
+			["Seal of Righteousness"] = 20288,
+			["Seal of Command"] = 20375,
+		},
+		usableSpells = {
+			["Judgement"] = true,
+			["Seal of Righteousness"] = true,
+			["Seal of Command"] = true,
+		},
+	})
+	local engine = c.ns:GetModule("WeaponEngine")
+	AssertEq(engine.weaponSpeed, 3.3, "Base weapon speed should be restored to 3.30s despite 15% melee haste")
+	AssertEq(engine:GetBracket(), "slow", "3.30s weapon under Warchief's Blessing must stay in slow bracket")
+	local rot = engine:GetRotation()
+	AssertEq(rot.primary, "Seal of Command", "Slow 3.30s weapon with SoC talent must recommend Seal of Command")
 end)
 
 print(string.format("\nResults: %d passed, %d failed", passed, failed))

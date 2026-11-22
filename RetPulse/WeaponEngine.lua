@@ -34,10 +34,23 @@ function WeaponEngine:ReadWeapon()
 		return select(1, UnitAttackSpeed("player"))
 	end)
 
-	-- UnitAttackSpeed becomes secret in combat on WoW: Forever. Keep the last
-	-- readable speed instead of wiping the bracket mid-fight.
+	-- UnitAttackSpeed returns the hasted swing speed (e.g. 2.87s for a 3.30s
+	-- weapon under 15% haste like Warchief's Blessing) and becomes secret in
+	-- combat. Convert back to the weapon's base speed via GetMeleeHaste() so
+	-- haste buffs never downgrade a slow 2H weapon into a faster seal bracket.
 	if speedOk and ns.IsReadable(speed) and speed > 0 then
-		self.weaponSpeed = speed
+		self.hastedSpeed = speed
+		if GetMeleeHaste then
+			local hasteOk, haste = pcall(GetMeleeHaste)
+			if hasteOk and ns.IsReadable(haste) and haste > -100 then
+				local baseSpeed = speed * (1 + haste / 100)
+				self.weaponSpeed = math.floor(baseSpeed * 100 + 0.5) / 100
+			elseif not self.weaponSpeed then
+				self.weaponSpeed = math.floor(speed * 100 + 0.5) / 100
+			end
+		else
+			self.weaponSpeed = math.floor(speed * 100 + 0.5) / 100
+		end
 	end
 end
 
