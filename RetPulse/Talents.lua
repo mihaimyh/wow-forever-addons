@@ -241,9 +241,9 @@ function Talents:EnsureHeader(talentsFrame)
 	end
 
 	local hdr = CreateFrame("Frame", nil, talentsFrame, "BackdropTemplate")
-	hdr:SetSize(250, 22)
-	hdr:SetPoint("TOPLEFT", talentsFrame, "TOPLEFT", 18, -30)
-	hdr:SetFrameLevel((talentsFrame:GetFrameLevel() or 10) + 20)
+	hdr:SetSize(268, 22)
+	hdr:SetPoint("TOP", talentsFrame, "TOP", 0, -54)
+	hdr:SetFrameLevel((talentsFrame:GetFrameLevel() or 10) + 25)
 	hdr:SetBackdrop({
 		bgFile = "Interface\\Buttons\\WHITE8X8",
 		edgeFile = "Interface\\Buttons\\WHITE8X8",
