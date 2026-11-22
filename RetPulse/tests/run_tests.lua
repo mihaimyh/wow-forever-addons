@@ -1457,6 +1457,34 @@ Test("31. Always-visible mode softly fades HUD out of combat and restores full a
 	AssertEq(ui.frame:GetAlpha(), 1, "HUD must return to full alpha (1.0) in combat")
 end)
 
+Test("32. Learned cooldowns persist in RetPulseDB and reset on talent or gear changes", function()
+	local c1 = CreateEnv({
+		knownSpells = { ["Judgement"] = 20271, ["Seal of Righteousness"] = 20288 },
+		usableSpells = { ["Judgement"] = true, ["Seal of Righteousness"] = true },
+	})
+	c1.SetCombat(true)
+	c1.Fire("UNIT_SPELLCAST_SUCCEEDED", "player", "j1", 20271)
+	c1.Advance(8.0) -- Improved Judgement 2/2 -> 8s cooldown
+	c1.Fire("UNIT_SPELLCAST_SUCCEEDED", "player", "j2", 20271)
+
+	AssertEq(c1.ns.db.learnedCooldowns["Judgement"], 8.0, "Learned 8s Judgement CD should be stored in RetPulseDB")
+
+	-- Simulate /reload with the same SavedVariables
+	local c2 = CreateEnv({
+		savedDB = c1.ns.db,
+		knownSpells = { ["Judgement"] = 20271, ["Seal of Righteousness"] = 20288 },
+		usableSpells = { ["Judgement"] = true, ["Seal of Righteousness"] = true },
+	})
+	local pq2 = c2.ns:GetModule("PriorityQueue")
+	c2.SetCombat(true)
+	c2.Fire("UNIT_SPELLCAST_SUCCEEDED", "player", "j3", 20271)
+	AssertEq(pq2.cdDuration["Judgement"], 8.0, "Persisted 8s CD should apply immediately on first cast after /reload")
+
+	-- Gear swap (e.g. unequipping a set bonus) resets learned cooldowns
+	c2.Fire("PLAYER_EQUIPMENT_CHANGED")
+	AssertEq(c2.ns.db.learnedCooldowns["Judgement"], nil, "Equipment change should clear learned cooldowns")
+end)
+
 print(string.format("\nResults: %d passed, %d failed", passed, failed))
 if failed > 0 then
 	os.exit(1)

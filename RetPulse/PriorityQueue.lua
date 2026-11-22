@@ -83,6 +83,12 @@ function PriorityQueue:OnLogin()
 	self.cdUntil = {}
 	self.cdStart = {}
 	self.cdDuration = {}
+	if ns.db then
+		ns.db.learnedCooldowns = ns.db.learnedCooldowns or {}
+		self.learned = ns.db.learnedCooldowns
+	else
+		self.learned = {}
+	end
 
 	ns:On("UNIT_SPELLCAST_SUCCEEDED", function(_, unit, _, spellID)
 		if unit == "player" then self:NoteCast(spellID) end
@@ -94,6 +100,18 @@ function PriorityQueue:OnLogin()
 		self.gcdStart = nil
 		self.gcdUntil = nil
 	end)
+
+	-- Reset learned cooldowns if talents or gear (set bonuses) change.
+	local function ResetLearned()
+		if ns.db then
+			ns.db.learnedCooldowns = {}
+			self.learned = ns.db.learnedCooldowns
+		else
+			self.learned = {}
+		end
+	end
+	ns:On("PLAYER_EQUIPMENT_CHANGED", ResetLearned)
+	ns:On("TRAIT_NODE_CHANGED", ResetLearned)
 end
 
 function PriorityQueue:NoteCast(spellID)
@@ -189,6 +207,11 @@ function PriorityQueue:GetRemainingInfo(name)
 		if C_Spell and C_Spell.GetSpellCooldown then
 			local ok, info = pcall(C_Spell.GetSpellCooldown, name)
 			if ok and type(info) == "table" and ns.IsReadable(info.startTime) and ns.IsReadable(info.duration) then
+				local base = BASE_COOLDOWN[name]
+				if base and info.duration > 2 and info.duration <= base then
+					self.learned = self.learned or {}
+					self.learned[name] = info.duration
+				end
 				local remaining = (info.startTime + info.duration) - GetTime()
 				if remaining < 0 then remaining = 0 end
 				return remaining, "client"

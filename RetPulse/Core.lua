@@ -47,6 +47,7 @@ local DEFAULTS = {
 	talentBuild = "dps",     -- "dps" (Benediction) or "leveling" (Deflection)
 	preferredBlessing = "auto", -- "auto" (Kings->Might->Wisdom) | "kings" | "might" | "wisdom" | "off"
 	remindAura = true,          -- remind out of combat if no Paladin Aura is active
+	learnedCooldowns = {},      -- persisted talented/set-reduced spell cooldowns
 	sound = true,         -- one click on SWAP NOW
 	visibility = "combat",       -- "combat" | "target" | "always"
 	showOutOfCombat = false,     -- legacy mirror of visibility
