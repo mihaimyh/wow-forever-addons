@@ -1,0 +1,16 @@
+# Normalize line endings across Windows/macOS/Linux
+* text=auto eol=lf
+
+*.lua text eol=lf
+*.toc text eol=lf
+*.xml text eol=lf
+*.md text eol=lf
+*.json text eol=lf
+*.ps1 text eol=crlf
+
+# Binary assets
+*.tga binary
+*.blp binary
+*.png binary
+*.ogg binary
+*.mp3 binary
