@@ -82,7 +82,9 @@ function CombatTracker:OnLogin()
 		self.lastSwingEventAt = nil
 		self.glowingSpells = {}
 		self.targetCasting = false
-		self.judgedCrusader = false
+		if not InCombatLockdown() then
+			self.judgedCrusader = false
+		end
 		-- Retry the Cooldown Manager scan a few times, then stop walking UIParent.
 		if (not self.cdmFrames or #self.cdmFrames == 0) and (self.cdmAttempts or 0) < 4 then
 			self:RefreshCdm()
@@ -108,7 +110,9 @@ function CombatTracker:OnLogin()
 		self.targetInRangeAt = nil
 		self.targetRangeFromEvent = false
 		self.targetCasting = false
-		self.judgedCrusader = false
+		if not InCombatLockdown() then
+			self.judgedCrusader = false
+		end
 	end)
 
 	local function OnTargetCastStart(_, unit)

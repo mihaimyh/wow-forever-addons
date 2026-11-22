@@ -38,19 +38,30 @@ function WeaponEngine:ReadWeapon()
 	-- weapon under 15% haste like Warchief's Blessing) and becomes secret in
 	-- combat. Convert back to the weapon's base speed via GetMeleeHaste() so
 	-- haste buffs never downgrade a slow 2H weapon into a faster seal bracket.
+	-- Seal of the Crusader also speeds swings by 40% outside GetMeleeHaste():
+	-- preserve the already-known base speed for the equipped weapon, or undo 1.4x.
 	if speedOk and ns.IsReadable(speed) and speed > 0 then
 		self.hastedSpeed = speed
+		local tracker = ns:GetModule("CombatTracker")
+		local crusaderUp = tracker and tracker.GetActiveSeal and tracker:GetActiveSeal() == ns.SPELLS.SEAL_CRUSADER
+		if crusaderUp and self.weaponSpeed and self.speedItemID == self.weaponItemID then
+			return
+		end
+
+		local baseSpeed = speed
 		if GetMeleeHaste then
 			local hasteOk, haste = pcall(GetMeleeHaste)
 			if hasteOk and ns.IsReadable(haste) and haste > -100 then
-				local baseSpeed = speed * (1 + haste / 100)
-				self.weaponSpeed = math.floor(baseSpeed * 100 + 0.5) / 100
-			elseif not self.weaponSpeed then
-				self.weaponSpeed = math.floor(speed * 100 + 0.5) / 100
+				baseSpeed = speed * (1 + haste / 100)
+			elseif self.weaponSpeed and self.speedItemID == self.weaponItemID then
+				return
 			end
-		else
-			self.weaponSpeed = math.floor(speed * 100 + 0.5) / 100
 		end
+		if crusaderUp then
+			baseSpeed = baseSpeed * 1.4
+		end
+		self.weaponSpeed = math.floor(baseSpeed * 100 + 0.5) / 100
+		self.speedItemID = self.weaponItemID
 	end
 end
 

@@ -1703,6 +1703,70 @@ Test("39. Auto-AoE detects 2+ melee enemies via Blizzard unitToken and NAME_PLAT
 	AssertEq(cur, "Holy Strike", "Removing a nameplate below 2 enemies must return to Holy Strike")
 end)
 
+Test("40. WeaponEngine ignores Seal of the Crusader +40% swing speed distortion", function()
+	local c = CreateEnv({
+		weaponSpeed = 3.30,
+		knownSpells = {
+			["Judgement"] = 20271,
+			["Seal of Righteousness"] = 20288,
+			["Seal of Command"] = 20375,
+			["Seal of the Crusader"] = 21082,
+		},
+		usableSpells = {
+			["Judgement"] = true,
+			["Seal of Righteousness"] = true,
+			["Seal of Command"] = true,
+			["Seal of the Crusader"] = true,
+		},
+	})
+	local engine = c.ns:GetModule("WeaponEngine")
+	AssertEq(engine.weaponSpeed, 3.3, "Initial base speed is 3.30s")
+
+	-- Casting Seal of the Crusader speeds swings by 40% (3.30 / 1.40 = 2.36s),
+	-- which must NOT downgrade the slow 3.30s weapon into the fast bracket.
+	c.Fire("UNIT_SPELLCAST_SUCCEEDED", "player", "sc1", 21082)
+	c.env.UnitAttackSpeed = function() return 3.30 / 1.40 end
+	c.Fire("UNIT_ATTACK_SPEED", "player")
+	AssertEq(engine.weaponSpeed, 3.3, "Known weaponSpeed must stay 3.30s while Seal of the Crusader is active")
+	AssertEq(engine:GetBracket(), "slow", "3.30s weapon must remain slow under Seal of the Crusader")
+end)
+
+Test("41. Crusader opener fires once per pull in combat (not on every tab-target between elites)", function()
+	local c = CreateEnv({
+		targetClassification = "elite",
+		knownSpells = {
+			["Judgement"] = 20271,
+			["Holy Strike"] = 678,
+			["Seal of Righteousness"] = 20288,
+			["Seal of the Crusader"] = 21082,
+		},
+		usableSpells = {
+			["Judgement"] = true,
+			["Holy Strike"] = true,
+			["Seal of Righteousness"] = true,
+			["Seal of the Crusader"] = true,
+		},
+	})
+	c.SetCombat(true)
+	local pq = c.ns:GetModule("PriorityQueue")
+
+	c.Fire("UNIT_SPELLCAST_SUCCEEDED", "player", "sc1", 21082)
+	c.Fire("UNIT_SPELLCAST_SUCCEEDED", "player", "j1", 20271)
+	c.Fire("UNIT_SPELLCAST_SUCCEEDED", "player", "sr1", 20288)
+	c.Advance(1.6)
+	pq.cdUntil["Judgement"] = c.env.GetTime() + 5.0
+
+	-- Tab-target to a second elite in the same dungeon pack: must NOT re-prompt Crusader
+	c.Fire("PLAYER_TARGET_CHANGED")
+	AssertEq(pq:Evaluate(), "Holy Strike", "Tab-targeting another elite in the same pull must not re-trigger Crusader opener")
+
+	-- Combat ends -> next pull resets judgedCrusader
+	c.SetCombat(false)
+	c.Fire("PLAYER_REGEN_ENABLED")
+	c.SetCombat(true)
+	AssertEq(pq:Evaluate(), "Seal of the Crusader", "New pull after leaving combat resets Crusader opener")
+end)
+
 print(string.format("\nResults: %d passed, %d failed", passed, failed))
 if failed > 0 then
 	os.exit(1)
