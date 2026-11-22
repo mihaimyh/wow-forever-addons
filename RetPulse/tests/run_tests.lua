@@ -174,6 +174,10 @@ local function CreateEnv(opts)
 		end
 		function f:Clear() self._cdStart, self._cdDur, self._cdDurObj = nil, nil, nil end
 		function f:IsForbidden() return false end
+		function f:RegisterForClicks() end
+		function f:HookScript(name, fn) self._scripts["hook_" .. name] = fn end
+		function f:SetAttribute(k, v) self._attrs = self._attrs or {}; self._attrs[k] = v end
+		function f:GetAttribute(k) return self._attrs and self._attrs[k] end
 		function f:GetChildren() return table.unpack(self._children) end
 		registeredFrames[#registeredFrames + 1] = f
 		return f
@@ -1569,6 +1573,34 @@ Test("37. Off-GCD casts do not start a false global cooldown", function()
 	AssertEq(pq.gcdUntil, nil, "Avenging Wrath is off the global cooldown")
 	c.Fire("UNIT_SPELLCAST_SUCCEEDED", "player", "h", 678)
 	Assert(pq.gcdUntil ~= nil, "Holy Strike spends the global cooldown")
+end)
+
+Test("38. Click-to-cast arms the secure button out of combat only, and not while unlocked", function()
+	local c = CreateEnv({ inCombat = false, targetExists = false })
+	local ui = c.ns:GetModule("UI")
+	AssertEq(ui.clickBtn ~= nil, true, "Secure click button must exist")
+
+	local attrs = {}
+	ui.clickBtn.SetAttribute = function(_, k, v) attrs[k] = v end
+
+	c.ns.db.locked = true
+	ui:UpdateClickCast("Blessing of Kings")
+	AssertEq(attrs.type, "spell", "Out of combat the button casts a spell")
+	AssertEq(attrs.spell, "Blessing of Kings", "Out of combat the button targets the recommended spell")
+
+	c.SetCombat(true)
+	ui:UpdateClickCast("Holy Strike")
+	AssertEq(attrs.spell, "Blessing of Kings", "Attributes must never change in combat")
+
+	c.SetCombat(false)
+	c.ns.db.locked = false
+	ui:UpdateClickCast("Holy Strike")
+	AssertEq(attrs.type, nil, "An unlocked HUD must not cast on click (click-drag moves it)")
+
+	c.ns.db.locked = true
+	c.ns.db.clickToCast = false
+	ui:UpdateClickCast("Holy Strike")
+	AssertEq(attrs.type, nil, "Disabled option must clear the button")
 end)
 
 print(string.format("\nResults: %d passed, %d failed", passed, failed))

@@ -362,6 +362,8 @@ function UI:Build()
 	nextLabel:SetText("NEXT")
 
 	self.frame = frame
+	local okClick, errClick = pcall(self.BuildClickCast, self, frame, main, cooldown)
+	if not okClick then ns:RecordError("BuildClickCast", errClick) end
 	self.caption = caption
 	self.accent = accent
 	self.pips = pips
@@ -596,6 +598,52 @@ function UI:ShouldBeVisible(db, inCombat, hasHostile, placing)
 	return db.showOutOfCombat or inCombat or hasHostile
 end
 
+-- Click-to-cast: a secure button over the main icon. Secure attributes cannot
+-- change in combat, so the button is hidden by a state driver while in combat
+-- (the HUD stays informative only) and re-armed out of combat.
+function UI:BuildClickCast(frame, main, cooldown)
+	local ok, btn = pcall(CreateFrame, "Button", nil, main, "SecureActionButtonTemplate")
+	if not ok or not btn then return end
+	btn:SetAllPoints(main)
+	btn:SetFrameLevel(cooldown:GetFrameLevel() + 4)
+	btn:RegisterForClicks("LeftButtonUp")
+	btn:RegisterForDrag("LeftButton")
+	btn:HookScript("OnDragStart", function()
+		if ns.db and not ns.db.locked then frame:StartMoving() end
+	end)
+	btn:HookScript("OnDragStop", function()
+		frame:StopMovingOrSizing()
+		UI:SavePosition()
+	end)
+	btn:HookScript("OnEnter", function(b)
+		if not UI.clickSpell or not GameTooltip then return end
+		GameTooltip:SetOwner(b, "ANCHOR_TOP")
+		GameTooltip:SetText("Click to cast " .. UI.clickSpell)
+		GameTooltip:Show()
+	end)
+	btn:HookScript("OnLeave", function()
+		if GameTooltip then GameTooltip:Hide() end
+	end)
+	if RegisterStateDriver then
+		pcall(RegisterStateDriver, btn, "visibility", "[combat] hide; show")
+	end
+	self.clickBtn = btn
+end
+
+function UI:UpdateClickCast(spell)
+	local btn = self.clickBtn
+	if not btn or InCombatLockdown() then return end
+	local db = ns.db or {}
+	local want = nil
+	if spell and db.clickToCast ~= false and db.locked then
+		want = spell
+	end
+	if want == self.clickSpell then return end
+	self.clickSpell = want
+	btn:SetAttribute("type", want and "spell" or nil)
+	btn:SetAttribute("spell", want)
+end
+
 function UI:RefreshInner()
 	if not self.frame then return end
 
@@ -661,7 +709,7 @@ function UI:RefreshInner()
 	-- With no hostile target the panel falls back to the active seal instead of
 	-- an anonymous shield, so the HUD keeps telling you something useful.
 	local displayName = current
-	if not displayName and not queue.hasTarget then
+	self:UpdateClickCast(current)	if not displayName and not queue.hasTarget then
 		displayName = tracker:GetActiveSeal()
 	end
 

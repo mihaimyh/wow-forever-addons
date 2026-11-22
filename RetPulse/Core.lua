@@ -53,6 +53,7 @@ local DEFAULTS = {
 	showOutOfCombat = false,     -- legacy mirror of visibility
 	combatOnly = true,           -- legacy mirror of visibility
 	showKeybinds = true,         -- show action-bar keybind badges on icons
+	clickToCast = true,          -- click the HUD icon to cast the recommendation (out of combat only)
 	schema = 5,
 	twistWithoutTalent = false, -- twist below 40, as the sim video advises
 	bracketMode = "video",       -- "video" (3 brackets, per the deep dive) or "icy" (2)

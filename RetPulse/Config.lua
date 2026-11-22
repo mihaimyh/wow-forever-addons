@@ -28,6 +28,12 @@ function Config:OnInitialize()
 				ns.SetLocked(ns.db.locked)
 			end)
 
+		self:AddCheckbox(category, "RetPulse_ClickToCast", "clickToCast",
+			"Click-to-cast out of combat", "Click the main HUD icon to cast the recommended spell (Blessing, Aura, Seal). Disabled in combat and while the HUD is unlocked.", function()
+				local ui = ns:GetModule("UI")
+				if ui then ui:Refresh() end
+			end)
+
 		if Settings.CreateDropdown and Settings.CreateControlTextContainer then
 			local visSetting = Settings.RegisterAddOnSetting(category, "RetPulse_Visibility", "visibility", ns.db,
 				Settings.VarType.String, "HUD visibility", "combat")
