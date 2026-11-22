@@ -704,12 +704,18 @@ function UI:RefreshInner()
 	local statusText = ""
 	local statusColor = GOLD
 
-	if ready then
+	if queue.currentIsInterrupt then
+		statusText = "INTERRUPT"
+		statusColor = WARN
+	elseif ready then
 		statusText = "SWAP NOW"
 		statusColor = READY
 	elseif warnSeal then
 		statusText = string.format("SEAL %s", Fmt(sealLeft))
 		statusColor = WARN
+	elseif queue.currentIsProc then
+		statusText = "PROC!"
+		statusColor = READY
 	elseif queue.currentNoMana then
 		statusText = "Low mana"
 		statusColor = OOM

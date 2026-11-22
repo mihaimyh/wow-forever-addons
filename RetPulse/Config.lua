@@ -90,7 +90,16 @@ function Config:OnInitialize()
 		end
 
 		self:AddCheckbox(category, "RetPulse_AoE", "aoe",
-			"Include Consecration", "Adds Consecration to the rotation queue.")
+			"Always include Consecration", "Force Consecration and Holy Wrath into single-target rotation too.")
+
+		self:AddCheckbox(category, "RetPulse_AutoAoE", "autoAoe",
+			"Auto-AoE from nameplates", "Automatically switch to AoE when 2+ hostile enemies are in melee range.")
+
+		self:AddCheckbox(category, "RetPulse_Interrupt", "suggestInterrupt",
+			"Interrupt alerts (Hammer of Justice)", "Prioritize Hammer of Justice when your target casts an interruptible spell.")
+
+		self:AddCheckbox(category, "RetPulse_CrusaderBoss", "crusaderOnBoss",
+			"Crusader opener on Boss/Elite", "Recommend Seal of the Crusader + Judgement once per Boss/Elite target.")
 
 		self:AddCheckbox(category, "RetPulse_Twist", "twistWithoutTalent",
 			"Twist without Unsealed Wrath", "Below level 40 the echoes do not exist; this follows the video literally.")

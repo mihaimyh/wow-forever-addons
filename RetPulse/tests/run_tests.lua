@@ -82,6 +82,8 @@ local function CreateEnv(opts)
 	spellById[24275] = "Hammer of Wrath"
 	spellById[20473] = "Holy Shock"
 	spellById[2812] = "Holy Wrath"
+	spellById[853] = "Hammer of Justice"
+	spellById[21082] = "Seal of the Crusader"
 
 	local registeredFrames = {}
 	local timers = {}
@@ -200,10 +202,48 @@ local function CreateEnv(opts)
 	function env.UnitLevel() return opts.playerLevel or 20 end
 	function env.UnitName() return targetExists and "Test Mob" or nil end
 	function env.UnitExists(u) return u == "target" and targetExists or true end
-	function env.UnitCanAttack() return targetExists and targetHostile end
-	function env.UnitIsDead() return targetDead end
+	local nameplates = opts.nameplates or {}
+	function env.UnitCanAttack(_, u)
+		if u == "target" then return targetExists and targetHostile end
+		for _, np in ipairs(nameplates) do
+			if np.unit == u then return np.hostile ~= false end
+		end
+		return false
+	end
+	function env.UnitIsDead(u)
+		if u == "target" then return targetDead end
+		for _, np in ipairs(nameplates) do
+			if np.unit == u then return np.dead == true end
+		end
+		return false
+	end
+	function env.UnitAffectingCombat(u)
+		if u == "player" then return inCombat end
+		for _, np in ipairs(nameplates) do
+			if np.unit == u then return np.inCombat ~= false end
+		end
+		return false
+	end
+	env.C_NamePlate = {
+		GetNamePlates = function()
+			local list = {}
+			for _, np in ipairs(nameplates) do
+				list[#list + 1] = { namePlateUnitToken = np.unit }
+			end
+			return list
+		end,
+	}
+	local targetClassification = opts.targetClassification or "normal"
+	local targetCastName, targetCastNotInt = nil, false
 	function env.UnitCreatureType() return targetExists and targetType or nil end
-	function env.UnitClassification() return "normal" end
+	function env.UnitClassification() return targetClassification end
+	function env.UnitCastingInfo(u)
+		if u == "target" and targetCastName then
+			return targetCastName, targetCastName, 0, now * 1000, (now + 2) * 1000, false, "cast1", targetCastNotInt
+		end
+		return nil
+	end
+	function env.UnitChannelInfo() return nil end
 	function env.UnitPower() return MakeSecret(500) end
 	function env.UnitPowerMax() return MakeSecret(1000) end
 	function env.UnitHealth() return MakeSecret(1000) end
@@ -239,7 +279,15 @@ local function CreateEnv(opts)
 			if noMana then return false, true end
 			return usableSpells[name] == true, false
 		end,
-		IsSpellInRange = function(name) return inRangeSpells[name] == true end,
+		IsSpellInRange = function(name, unit)
+			if unit and unit ~= "target" then
+				for _, np in ipairs(nameplates) do
+					if np.unit == unit then return np.inRange ~= false end
+				end
+				return false
+			end
+			return inRangeSpells[name] == true
+		end,
 		GetSpellCooldown = function(name)
 			if inCombat then
 				return { startTime = MakeSecret(0), duration = MakeSecret(0), isEnabled = true }
@@ -383,6 +431,12 @@ local function CreateEnv(opts)
 		SetSwingInRange = function(v) swingInRange = v end,
 		SetTargetType = function(t) targetType = t end,
 		SetWeaponItemID = function(id) weaponItemID = id end,
+		SetNameplates = function(list) nameplates = list end,
+		SetTargetClassification = function(cls) targetClassification = cls end,
+		SetTargetCasting = function(name, notInt)
+			targetCastName = name
+			targetCastNotInt = notInt == true
+		end,
 		GetRangeCheckEnabled = function(st) return rangeCheckEnabled[st] end,
 		MakeFrame = MakeFrame,
 	}
@@ -910,6 +964,172 @@ Test("18. Secret-safe mana bar passes raw UnitPower/UnitPowerMax straight to Sta
 	Assert(c.env.issecretvalue(ui.manaBar._val), "manaBar should accept raw secret UnitPower without Lua arithmetic")
 	Assert(c.env.issecretvalue(ui.manaBar._max), "manaBar should accept raw secret UnitPowerMax without Lua arithmetic")
 	AssertEq(c.ns.db.lastError, nil, "Secret-safe mana bar must produce zero errors")
+end)
+
+Test("19. Proc detection via SPELL_ACTIVATION_OVERLAY_GLOW_SHOW bumps spell to top with PROC! status", function()
+	local c = CreateEnv({
+		playerLevel = 40,
+		targetType = "Humanoid",
+		knownSpells = {
+			["Judgement"] = 20271,
+			["Holy Strike"] = 678,
+			["Exorcism"] = 879,
+			["Seal of Righteousness"] = 20288,
+		},
+		usableSpells = {
+			["Judgement"] = true,
+			["Holy Strike"] = true,
+			["Exorcism"] = true,
+			["Seal of Righteousness"] = true,
+		},
+	})
+	c.SetCombat(true)
+	c.Fire("UNIT_SPELLCAST_SUCCEEDED", "player", "s1", 20288)
+	c.Advance(1.6)
+	c.Fire("UNIT_SPELLCAST_SUCCEEDED", "player", "j1", 20271) -- Judgement on CD
+
+	-- Exorcism procs via Blizzard SpellActivationOverlay glow
+	c.Fire("SPELL_ACTIVATION_OVERLAY_GLOW_SHOW", 879)
+
+	local tracker = c.ns:GetModule("CombatTracker")
+	AssertEq(tracker:IsSpellGlowing("Exorcism"), true, "Exorcism should be tracked as glowing")
+
+	local pq = c.ns:GetModule("PriorityQueue")
+	local cur = pq:Evaluate()
+	AssertEq(cur, "Exorcism", "Glowing proc spell should take priority over Holy Strike")
+	AssertEq(pq.currentIsProc, true, "PriorityQueue should flag currentIsProc=true")
+
+	local ui = c.ns:GetModule("UI")
+	ui:Refresh()
+	AssertEq(ui.status:GetText(), "PROC!", "HUD status should show PROC!")
+
+	c.Fire("SPELL_ACTIVATION_OVERLAY_GLOW_HIDE", 879)
+	AssertEq(tracker:IsSpellGlowing("Exorcism"), false, "Glow hide should clear proc state")
+end)
+
+Test("20. Auto-AoE senses >= 2 hostile melee nameplates and switches to Consecration automatically", function()
+	local c = CreateEnv({
+		playerLevel = 30,
+		knownSpells = {
+			["Judgement"] = 20271,
+			["Holy Strike"] = 678,
+			["Consecration"] = 26573,
+			["Seal of Righteousness"] = 20288,
+		},
+		usableSpells = {
+			["Judgement"] = true,
+			["Holy Strike"] = true,
+			["Consecration"] = true,
+			["Seal of Righteousness"] = true,
+		},
+		nameplates = {
+			{ unit = "nameplate1", hostile = true, inCombat = true, inRange = true },
+			{ unit = "nameplate2", hostile = true, inCombat = true, inRange = true },
+		},
+	})
+	c.SetCombat(true)
+	c.Fire("UNIT_SPELLCAST_SUCCEEDED", "player", "s1", 20288)
+	c.Advance(1.6)
+	c.Fire("UNIT_SPELLCAST_SUCCEEDED", "player", "j1", 20271) -- Judgement on CD
+
+	local tracker = c.ns:GetModule("CombatTracker")
+	AssertEq(tracker:GetMeleeEnemyCount(), 2, "Should count 2 hostile in-combat melee nameplates")
+
+	-- Manual aoe is OFF, but autoAoe is ON by default -> Consecration should outrank Holy Strike
+	AssertEq(c.ns.db.aoe, false, "Manual aoe flag is off")
+	local pq = c.ns:GetModule("PriorityQueue")
+	AssertEq(pq:Evaluate(), "Consecration", "Auto-AoE should recommend Consecration with 2+ melee enemies")
+
+	-- Drop down to 1 enemy -> returns to single-target Holy Strike
+	c.SetNameplates({ { unit = "nameplate1", hostile = true, inCombat = true, inRange = true } })
+	c.Advance(0.3)
+	AssertEq(tracker:GetMeleeEnemyCount(), 1, "Should update to 1 melee enemy")
+	AssertEq(pq:Evaluate(), "Holy Strike", "Should return to Holy Strike with 1 enemy")
+end)
+
+Test("21. Interrupt sensing recommends Hammer of Justice when target casts an interruptible spell", function()
+	local c = CreateEnv({
+		playerLevel = 20,
+		knownSpells = {
+			["Judgement"] = 20271,
+			["Holy Strike"] = 678,
+			["Hammer of Justice"] = 853,
+			["Seal of Righteousness"] = 20288,
+		},
+		usableSpells = {
+			["Judgement"] = true,
+			["Holy Strike"] = true,
+			["Hammer of Justice"] = true,
+			["Seal of Righteousness"] = true,
+		},
+		inRangeSpells = {
+			["Judgement"] = true,
+			["Holy Strike"] = true,
+			["Hammer of Justice"] = true,
+		},
+	})
+	c.SetCombat(true)
+	c.Fire("UNIT_SPELLCAST_SUCCEEDED", "player", "s1", 20288)
+	c.Advance(1.6)
+
+	-- Target starts casting an interruptible spell
+	c.SetTargetCasting("Fireball", false)
+	c.Fire("UNIT_SPELLCAST_START", "target", "e1", 133)
+
+	local pq = c.ns:GetModule("PriorityQueue")
+	local cur = pq:Evaluate()
+	AssertEq(cur, "Hammer of Justice", "Should recommend Hammer of Justice to interrupt enemy cast")
+	AssertEq(pq.currentIsInterrupt, true, "PriorityQueue should flag currentIsInterrupt=true")
+
+	local ui = c.ns:GetModule("UI")
+	ui:Refresh()
+	AssertEq(ui.status:GetText(), "INTERRUPT", "HUD status should show INTERRUPT")
+
+	-- Cast stops -> returns to normal rotation (Judgement)
+	c.SetTargetCasting(nil, false)
+	c.Fire("UNIT_SPELLCAST_STOP", "target", "e1", 133)
+	AssertEq(pq:Evaluate(), "Judgement", "Should return to Judgement once enemy cast stops")
+end)
+
+Test("22. Boss/Elite opener recommends Seal of the Crusader -> Judgement once per target, skipped on normal mobs", function()
+	local c = CreateEnv({
+		playerLevel = 60,
+		targetClassification = "worldboss",
+		knownSpells = {
+			["Judgement"] = 20271,
+			["Holy Strike"] = 678,
+			["Seal of Righteousness"] = 20288,
+			["Seal of the Crusader"] = 21082,
+		},
+		usableSpells = {
+			["Judgement"] = true,
+			["Holy Strike"] = true,
+			["Seal of Righteousness"] = true,
+			["Seal of the Crusader"] = true,
+		},
+	})
+	c.SetCombat(true)
+	local pq = c.ns:GetModule("PriorityQueue")
+
+	-- On worldboss with no Crusader judged yet: recommend Seal of the Crusader
+	AssertEq(pq:Evaluate(), "Seal of the Crusader", "Should open with Seal of the Crusader on boss")
+
+	-- Cast Seal of the Crusader -> next recommend Judgement
+	c.Fire("UNIT_SPELLCAST_SUCCEEDED", "player", "sc1", 21082)
+	c.Advance(1.6)
+	AssertEq(pq:Evaluate(), "Judgement", "Should Judge Seal of the Crusader on boss")
+
+	-- Cast Judgement -> Crusader debuff is now tracked as active on this boss; swap to normal primary seal!
+	c.Fire("UNIT_SPELLCAST_SUCCEEDED", "player", "j1", 20271)
+	AssertEq(pq:Evaluate(), "Seal of Righteousness", "After judging Crusader, should switch to primary DPS seal")
+
+	-- Normal mob: never recommends Seal of the Crusader
+	c.SetTargetClassification("normal")
+	c.Fire("PLAYER_TARGET_CHANGED")
+	c.Fire("UNIT_SPELLCAST_SUCCEEDED", "player", "clear", 20288)
+	c.Advance(1.6)
+	local curNormal = pq:Evaluate()
+	Assert(curNormal ~= "Seal of the Crusader", "Must not recommend Seal of the Crusader on normal mobs")
 end)
 
 print(string.format("\nResults: %d passed, %d failed", passed, failed))

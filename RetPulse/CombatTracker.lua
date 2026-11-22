@@ -80,10 +80,21 @@ function CombatTracker:OnLogin()
 		-- cooldown on the icon, which is what made it flash.
 		self:ResetSwing()
 		self.lastSwingEventAt = nil
+		self.glowingSpells = {}
+		self.targetCasting = false
+		self.judgedCrusader = false
 		-- Retry the Cooldown Manager scan a few times, then stop walking UIParent.
 		if (not self.cdmFrames or #self.cdmFrames == 0) and (self.cdmAttempts or 0) < 4 then
 			self:RefreshCdm()
 		end
+	end)
+
+	self.glowingSpells = {}
+	ns:On("SPELL_ACTIVATION_OVERLAY_GLOW_SHOW", function(_, spellID)
+		self:SetSpellGlow(spellID, true)
+	end)
+	ns:On("SPELL_ACTIVATION_OVERLAY_GLOW_HIDE", function(_, spellID)
+		self:SetSpellGlow(spellID, false)
 	end)
 
 	C_Timer.After(8, function()
@@ -96,6 +107,24 @@ function CombatTracker:OnLogin()
 		self.targetInRange = nil
 		self.targetInRangeAt = nil
 		self.targetRangeFromEvent = false
+		self.targetCasting = false
+		self.judgedCrusader = false
+	end)
+
+	local function OnTargetCastStart(_, unit)
+		if unit == "target" then self.targetCasting = true end
+	end
+	local function OnTargetCastEnd(_, unit)
+		if unit == "target" then self.targetCasting = false end
+	end
+	ns:On("UNIT_SPELLCAST_START", OnTargetCastStart)
+	ns:On("UNIT_SPELLCAST_CHANNEL_START", OnTargetCastStart)
+	ns:On("UNIT_SPELLCAST_STOP", OnTargetCastEnd)
+	ns:On("UNIT_SPELLCAST_INTERRUPTED", OnTargetCastEnd)
+	ns:On("UNIT_SPELLCAST_FAILED", OnTargetCastEnd)
+	ns:On("UNIT_SPELLCAST_CHANNEL_STOP", OnTargetCastEnd)
+	ns:On("UNIT_SPELLCAST_SUCCEEDED", function(_, unit)
+		if unit == "target" then self.targetCasting = false end
 	end)
 
 	if C_SwingTimer and C_SwingTimer.EnableRangeCheck and Enum and Enum.PlayerSwingType then
@@ -300,6 +329,9 @@ function CombatTracker:OnSpellCast(spellID)
 	if not ok or type(info) ~= "table" or type(info.name) ~= "string" then return end
 
 	local name = info.name
+	if name == ns.SPELLS.JUDGEMENT and self:GetActiveSeal() == ns.SPELLS.SEAL_CRUSADER then
+		self.judgedCrusader = true
+	end
 	if not self:IsSealName(name) then return end
 
 	self.sealCasts = (self.sealCasts or 0) + 1
@@ -645,6 +677,97 @@ function CombatTracker:GetSealRemaining()
 	local remaining = self.sealExpiresAt - GetTime()
 	if remaining < 0 then return 0 end
 	return remaining
+end
+
+function CombatTracker:SetSpellGlow(spellID, glowing)
+	if not ns.IsReadable(spellID) or type(spellID) ~= "number" then return end
+	if not C_Spell or not C_Spell.GetSpellInfo then return end
+	local ok, info = pcall(C_Spell.GetSpellInfo, spellID)
+	if not ok or type(info) ~= "table" or type(info.name) ~= "string" or ns.IsSecret(info.name) then return end
+	self.glowingSpells = self.glowingSpells or {}
+	self.glowingSpells[info.name] = glowing and true or nil
+end
+
+function CombatTracker:IsSpellGlowing(name)
+	if not name then return false end
+	if self.glowingSpells and self.glowingSpells[name] then return true end
+	if C_SpellActivationOverlay and C_SpellActivationOverlay.IsSpellOverlayed
+		and C_Spell and C_Spell.GetSpellIDForSpellIdentifier then
+		local okId, id = pcall(C_Spell.GetSpellIDForSpellIdentifier, name)
+		if okId and type(id) == "number" and not ns.IsSecret(id) then
+			local okOv, ov = pcall(C_SpellActivationOverlay.IsSpellOverlayed, id)
+			if okOv and ns.IsReadable(ov) and ov then return true end
+		end
+	end
+	return false
+end
+
+function CombatTracker:GetMeleeEnemyCount()
+	local now = GetTime()
+	if self.meleeEnemyCount ~= nil and self.meleeEnemyCountAt and (now - self.meleeEnemyCountAt) < 0.2 then
+		return self.meleeEnemyCount
+	end
+
+	local count = 0
+	if C_NamePlate and C_NamePlate.GetNamePlates then
+		local ok, plates = pcall(C_NamePlate.GetNamePlates)
+		if ok and type(plates) == "table" then
+			for _, plate in ipairs(plates) do
+				local unit = type(plate) == "table" and ReadFieldSafe(plate, "namePlateUnitToken") or nil
+				if type(unit) == "string" and not ns.IsSecret(unit) then
+					local hostile = UnitCanAttack and UnitCanAttack("player", unit)
+					local dead = UnitIsDead and UnitIsDead(unit)
+					local fighting = (not UnitAffectingCombat) or UnitAffectingCombat(unit)
+					if hostile and not dead and fighting then
+						local inMelee = false
+						if C_Spell and C_Spell.IsSpellInRange then
+							local okR, r = pcall(C_Spell.IsSpellInRange, ns.SPELLS.HOLY_STRIKE, unit)
+							if okR and ns.IsReadable(r) and r then inMelee = true end
+						end
+						if inMelee then
+							count = count + 1
+						end
+					end
+				end
+			end
+		end
+	end
+
+	self.meleeEnemyCount = count
+	self.meleeEnemyCountAt = now
+	return count
+end
+
+function CombatTracker:IsTargetCastingInterruptible()
+	if not UnitExists("target") or not UnitCanAttack("player", "target") then
+		return false
+	end
+	if UnitCastingInfo then
+		local ok, castName, _, _, _, _, _, _, notInterruptible = pcall(UnitCastingInfo, "target")
+		if ok and castName ~= nil then
+			if ns.IsReadable(notInterruptible) and notInterruptible == true then
+				return false
+			end
+			return true
+		end
+	end
+	if UnitChannelInfo then
+		local ok, chanName, _, _, _, _, _, notInterruptible = pcall(UnitChannelInfo, "target")
+		if ok and chanName ~= nil then
+			if ns.IsReadable(notInterruptible) and notInterruptible == true then
+				return false
+			end
+			return true
+		end
+	end
+	if not UnitCastingInfo and not UnitChannelInfo then
+		return self.targetCasting == true
+	end
+	return false
+end
+
+function CombatTracker:HasJudgedCrusader()
+	return self.judgedCrusader == true
 end
 
 function CombatTracker:DebugLine()

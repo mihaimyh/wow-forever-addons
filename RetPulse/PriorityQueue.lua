@@ -67,6 +67,7 @@ local BASE_COOLDOWN = {
 	["Holy Strike"] = 10,
 	["Exorcism"] = 15,
 	["Hammer of Wrath"] = 6,
+	["Hammer of Justice"] = 60,
 	["Consecration"] = 8,
 	["Holy Shock"] = 30,
 	["Holy Wrath"] = 60,
@@ -282,11 +283,44 @@ function PriorityQueue:Evaluate()
 
 	local candidates = {}
 
-	local function Add(name, requiresRange)
+	local function Add(name, requiresRange, meta)
 		if not name then return end
 		local inRange = true
 		if requiresRange then inRange = InRange(name) end
-		candidates[#candidates + 1] = { name = name, inRange = inRange }
+		candidates[#candidates + 1] = {
+			name = name,
+			inRange = inRange,
+			isProc = meta and meta.isProc or false,
+			isInterrupt = meta and meta.isInterrupt or false,
+		}
+	end
+
+	-- -1. Interrupt: if the target is casting an interruptible spell and
+	--     Hammer of Justice is ready & in range, prioritize the interrupt.
+	if hasTarget and (db.suggestInterrupt ~= false) and gcdReady
+		and tracker and tracker.IsTargetCastingInterruptible and tracker:IsTargetCastingInterruptible()
+		and IsKnown(ns.SPELLS.HAMMER_OF_JUSTICE) and IsUsable(ns.SPELLS.HAMMER_OF_JUSTICE)
+		and self:IsReady(ns.SPELLS.HAMMER_OF_JUSTICE) and InRange(ns.SPELLS.HAMMER_OF_JUSTICE) then
+		Add(ns.SPELLS.HAMMER_OF_JUSTICE, true, { isInterrupt = true })
+	end
+
+	-- 0a. Boss / Elite opener: apply Judgement of the Crusader once per target.
+	local cls = hasTarget and UnitClassification and UnitClassification("target") or nil
+	if cls ~= nil and ns.IsSecret(cls) then cls = nil end
+	local isBossOrElite = (cls == "worldboss" or cls == "elite" or cls == "rareelite")
+	local needCrusader = hasTarget and (db.crusaderOnBoss ~= false) and isBossOrElite
+		and tracker and tracker.HasJudgedCrusader and not tracker:HasJudgedCrusader()
+		and IsKnown(ns.SPELLS.SEAL_CRUSADER) and IsUsable(ns.SPELLS.SEAL_CRUSADER)
+
+	if needCrusader then
+		if activeSeal ~= ns.SPELLS.SEAL_CRUSADER and gcdReady then
+			Add(ns.SPELLS.SEAL_CRUSADER, false)
+		elseif activeSeal == ns.SPELLS.SEAL_CRUSADER and IsUsable(ns.SPELLS.JUDGEMENT) and self:IsReady(ns.SPELLS.JUDGEMENT) then
+			Add(ns.SPELLS.JUDGEMENT, true)
+		end
+	elseif activeSeal == ns.SPELLS.SEAL_CRUSADER and primalName and gcdReady then
+		-- Crusader already judged: immediately switch back to primary DPS seal.
+		Add(primalName, false)
 	end
 
 	-- 0. No seal up: nothing else matters, every swing is losing seal damage.
@@ -300,8 +334,28 @@ function PriorityQueue:Evaluate()
 		Add(secondaryName, false)
 	end
 
-	-- 2. Judgement. Never while Seal of Fury is up: its Judgement is a taunt.
+	-- 1.5. Glowing procs (Blizzard SpellActivationOverlay): react immediately to
+	--      any combat proc that lights up a known rotational spell.
 	local furyUp = activeSeal == ns.SPELLS.SEAL_FURY
+	if hasTarget and tracker and tracker.IsSpellGlowing then
+		local procSpells = {
+			ns.SPELLS.EXORCISM,
+			ns.SPELLS.HAMMER_OF_WRATH,
+			ns.SPELLS.HOLY_STRIKE,
+			ns.SPELLS.HOLY_SHOCK,
+			ns.SPELLS.JUDGEMENT,
+		}
+		for _, spellName in ipairs(procSpells) do
+			local allowed = (spellName ~= ns.SPELLS.JUDGEMENT) or (not furyUp)
+			local needsGcd = not OFF_GCD[spellName]
+			if allowed and (not needsGcd or gcdReady) and tracker:IsSpellGlowing(spellName)
+				and IsKnown(spellName) and IsUsable(spellName) and self:IsReady(spellName) then
+				Add(spellName, true, { isProc = true })
+			end
+		end
+	end
+
+	-- 2. Judgement. Never while Seal of Fury is up: its Judgement is a taunt.
 	if hasTarget and not furyUp and IsUsable(ns.SPELLS.JUDGEMENT) and self:IsReady(ns.SPELLS.JUDGEMENT) then
 		Add(ns.SPELLS.JUDGEMENT, true)
 	end
@@ -312,12 +366,14 @@ function PriorityQueue:Evaluate()
 		Add(ns.SPELLS.HAMMER_OF_WRATH, true)
 	end
 
-	-- 4. AoE priority when the player turned AoE on: Consecration (and Holy Wrath
-	--    on Undead/Demon packs) takes precedence over single-target fillers.
-	if db.aoe and gcdReady and IsUsable(ns.SPELLS.CONSECRATION) and self:IsReady(ns.SPELLS.CONSECRATION) then
+	-- 4. AoE priority when manual AoE is on OR Auto-AoE detects 2+ hostile mobs
+	--    in melee range via nameplates.
+	local autoAoeActive = (db.autoAoe ~= false) and tracker and tracker.GetMeleeEnemyCount and (tracker:GetMeleeEnemyCount() >= 2)
+	local aoeActive = (db.aoe == true) or autoAoeActive
+	if aoeActive and gcdReady and IsUsable(ns.SPELLS.CONSECRATION) and self:IsReady(ns.SPELLS.CONSECRATION) then
 		Add(ns.SPELLS.CONSECRATION, false)
 	end
-	if db.aoe and hasTarget and exorcismTarget and gcdReady and IsUsable(ns.SPELLS.HOLY_WRATH) and self:IsReady(ns.SPELLS.HOLY_WRATH) then
+	if aoeActive and hasTarget and exorcismTarget and gcdReady and IsUsable(ns.SPELLS.HOLY_WRATH) and self:IsReady(ns.SPELLS.HOLY_WRATH) then
 		Add(ns.SPELLS.HOLY_WRATH, false)
 	end
 
@@ -381,7 +437,7 @@ function PriorityQueue:Evaluate()
 		end
 		ConsiderUpcoming(ns.SPELLS.HOLY_SHOCK, true)
 	end
-	if db.aoe then
+	if aoeActive then
 		ConsiderUpcoming(ns.SPELLS.CONSECRATION, false)
 		if hasTarget and exorcismTarget then
 			ConsiderUpcoming(ns.SPELLS.HOLY_WRATH, false)
@@ -433,6 +489,8 @@ function PriorityQueue:Evaluate()
 	self.current = current and current.name or nil
 	self.next = nextAction and nextAction.name or nil
 	self.currentInRange = current and current.inRange or nil
+	self.currentIsProc = current and current.isProc == true or false
+	self.currentIsInterrupt = current and current.isInterrupt == true or false
 	self.hasTarget = hasTarget and true or false
 
 	return self.current, self.next

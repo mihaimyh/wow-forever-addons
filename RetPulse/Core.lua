@@ -15,11 +15,13 @@ ns.SPELLS = {
 	EXORCISM        = "Exorcism",
 	CONSECRATION    = "Consecration",
 	HAMMER_OF_WRATH = "Hammer of Wrath",
+	HAMMER_OF_JUSTICE = "Hammer of Justice",
 	HOLY_SHOCK      = "Holy Shock",
 	HOLY_WRATH      = "Holy Wrath",
 	SEAL_COMMAND    = "Seal of Command",
 	SEAL_RIGHT      = "Seal of Righteousness",
 	SEAL_FURY       = "Seal of Fury",
+	SEAL_CRUSADER   = "Seal of the Crusader",
 	UNSEALED_WRATH  = "Unsealed Wrath",
 }
 
@@ -31,7 +33,10 @@ local DEFAULTS = {
 	locked = true,
 	scale = 1.0,
 	auto = true,          -- auto seal pairing from weapon speed (hint only)
-	aoe = false,          -- include Consecration
+	aoe = false,          -- always include Consecration / Holy Wrath
+	autoAoe = true,       -- auto-enable AoE when 2+ hostile mobs are in melee range
+	suggestInterrupt = true, -- suggest Hammer of Justice when target casts an interruptible spell
+	crusaderOnBoss = true,   -- recommend Seal of the Crusader opener on Elites/Bosses
 	sound = true,         -- one click on SWAP NOW
 	visibility = "combat",       -- "combat" | "target" | "always"
 	showOutOfCombat = false,     -- legacy mirror of visibility
