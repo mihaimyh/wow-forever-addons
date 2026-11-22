@@ -1132,6 +1132,31 @@ Test("22. Boss/Elite opener recommends Seal of the Crusader -> Judgement once pe
 	Assert(curNormal ~= "Seal of the Crusader", "Must not recommend Seal of the Crusader on normal mobs")
 end)
 
+Test("23. Missing seal during active GCD previews primary seal instead of flashing long spell CD", function()
+	local c = CreateEnv({
+		playerLevel = 21,
+		knownSpells = {
+			["Judgement"] = 20271,
+			["Holy Strike"] = 678,
+			["Seal of Righteousness"] = 20288,
+		},
+		usableSpells = {
+			["Judgement"] = false, -- no seal up
+			["Holy Strike"] = true,
+			["Seal of Righteousness"] = true,
+		},
+	})
+	c.SetCombat(true)
+	-- Cast Holy Strike while no seal is active -> GCD is active (~1.5s), HS is on 10s CD
+	c.Fire("UNIT_SPELLCAST_SUCCEEDED", "player", "hs1", 678)
+	c.Advance(0.5) -- 1.0s left on GCD
+
+	local pq = c.ns:GetModule("PriorityQueue")
+	local cur = pq:Evaluate()
+	AssertEq(cur, "Seal of Righteousness", "During GCD with no seal up, must preview primary seal instead of Holy Strike")
+	Assert(pq.countdown and pq.countdown <= 1.1, "Countdown should reflect remaining GCD (~1.0s), got: " .. tostring(pq.countdown))
+end)
+
 print(string.format("\nResults: %d passed, %d failed", passed, failed))
 if failed > 0 then
 	os.exit(1)

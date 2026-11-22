@@ -420,6 +420,10 @@ function PriorityQueue:Evaluate()
 		}
 	end
 
+	if primalName and activeSeal == nil then
+		ConsiderUpcoming(primalName, false)
+	end
+
 	if hasTarget then
 		local sealAfterCurrent = activeSeal
 		if current and current.name == primalName and activeSeal == nil then
