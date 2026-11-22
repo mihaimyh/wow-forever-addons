@@ -108,7 +108,7 @@ server.tool(
   async () => {
     const accounts = listAccounts();
     const addons = exists(ADDONS_DIR)
-      ? fs.readdirSync(ADDONS_DIR, { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => d.name)
+      ? fs.readdirSync(ADDONS_DIR, { withFileTypes: true }).filter((d) => d.isDirectory() || d.isSymbolicLink()).map((d) => d.name)
       : [];
     const logs = exists(LOGS_DIR)
       ? fs.readdirSync(LOGS_DIR).map((name) => {

@@ -154,14 +154,17 @@ local function CreateEnv(opts)
 		function f:SetFrameLevel(l) self._level = l end
 		function f:SetStatusBarTexture() end
 		function f:SetStatusBarColor() end
-		function f:SetMinMaxValues() end
+		function f:SetMinMaxValues(lo, hi) self._min, self._max = lo, hi end
 		function f:SetValue(v) self._val = v end
 		function f:SetDrawEdge() end
 		function f:SetDrawBling() end
 		function f:SetHideCountdownNumbers() end
 		function f:SetSwipeColor() end
 		function f:SetCooldown(start, dur) self._cdStart, self._cdDur = start, dur end
-		function f:Clear() self._cdStart, self._cdDur = nil, nil end
+		function f:SetCooldownFromDurationObject(durObj, clearIfZero)
+			self._cdDurObj, self._clearIfZero = durObj, clearIfZero
+		end
+		function f:Clear() self._cdStart, self._cdDur, self._cdDurObj = nil, nil, nil end
 		function f:IsForbidden() return false end
 		function f:GetChildren() return table.unpack(self._children) end
 		registeredFrames[#registeredFrames + 1] = f
@@ -202,6 +205,7 @@ local function CreateEnv(opts)
 	function env.UnitCreatureType() return targetExists and targetType or nil end
 	function env.UnitClassification() return "normal" end
 	function env.UnitPower() return MakeSecret(500) end
+	function env.UnitPowerMax() return MakeSecret(1000) end
 	function env.UnitHealth() return MakeSecret(1000) end
 	function env.GetInventoryItemID() return weaponItemID end
 	function env.UnitAttackSpeed()
@@ -230,13 +234,23 @@ local function CreateEnv(opts)
 			end
 		end,
 		GetSpellTexture = function(name) return name and ("tex:" .. name) or nil end,
-		IsSpellUsable = function(name) return usableSpells[name] == true, false end,
+		IsSpellUsable = function(name)
+			local noMana = opts.noManaSpells and opts.noManaSpells[name] == true or false
+			if noMana then return false, true end
+			return usableSpells[name] == true, false
+		end,
 		IsSpellInRange = function(name) return inRangeSpells[name] == true end,
 		GetSpellCooldown = function(name)
 			if inCombat then
 				return { startTime = MakeSecret(0), duration = MakeSecret(0), isEnabled = true }
 			end
 			return { startTime = 0, duration = 0, isEnabled = true }
+		end,
+		GetSpellCooldownDuration = function(name)
+			if opts.cooldownDurations then
+				return opts.cooldownDurations[name]
+			end
+			return nil
 		end,
 	}
 
@@ -260,7 +274,11 @@ local function CreateEnv(opts)
 		end,
 	}
 
+	local rangeCheckEnabled = {}
 	env.C_SwingTimer = {
+		EnableRangeCheck = function(swingType, enabled)
+			rangeCheckEnabled[swingType] = enabled
+		end,
 		IsTargetWithinSwingRange = function() return swingInRange end,
 	}
 
@@ -365,6 +383,7 @@ local function CreateEnv(opts)
 		SetSwingInRange = function(v) swingInRange = v end,
 		SetTargetType = function(t) targetType = t end,
 		SetWeaponItemID = function(id) weaponItemID = id end,
+		GetRangeCheckEnabled = function(st) return rangeCheckEnabled[st] end,
 		MakeFrame = MakeFrame,
 	}
 
@@ -795,6 +814,102 @@ Test("14. Execute (HoW) > AoE (Consecration/Holy Wrath) > Holy Strike > Holy Sho
 	c.Advance(1.6)
 	local cur4 = pq:Evaluate()
 	AssertEq(cur4, "Holy Shock", "Holy Shock should fill when talented and other spells are on CD")
+end)
+
+Test("15. Swing range uses C_SwingTimer.EnableRangeCheck and PLAYER_SWING_RANGE_UPDATE", function()
+	local c = CreateEnv({ swingInRange = true })
+	local tracker = c.ns:GetModule("CombatTracker")
+
+	AssertEq(c.GetRangeCheckEnabled(0), true, "MainHand range check should be enabled on login")
+
+	-- Event pushes out-of-range immediately without waiting for TTL
+	c.Fire("PLAYER_SWING_RANGE_UPDATE", 0, false, true)
+	AssertEq(tracker:IsInSwingRange(), false, "PLAYER_SWING_RANGE_UPDATE(false, true) sets out of range")
+
+	-- Event pushes back in-range immediately
+	c.Fire("PLAYER_SWING_RANGE_UPDATE", 0, true, true)
+	AssertEq(tracker:IsInSwingRange(), true, "PLAYER_SWING_RANGE_UPDATE(true, true) sets in range")
+
+	-- checksRange == false must NOT overwrite range with false (per SwingTimerDocumentation.lua)
+	c.Fire("PLAYER_SWING_RANGE_UPDATE", 0, false, false)
+	AssertEq(tracker:IsInSwingRange(), true, "checksRange=false must not mark target out of range")
+end)
+
+Test("16. Cooldown swipe uses C_Spell.GetSpellCooldownDuration via SetCooldownFromDurationObject", function()
+	local fakeDurationObj = { __durationObject = true, id = "judgement_cd" }
+	local c = CreateEnv({
+		playerLevel = 20,
+		knownSpells = {
+			["Judgement"] = 20271,
+			["Holy Strike"] = 678,
+			["Seal of Righteousness"] = 20288,
+		},
+		usableSpells = {
+			["Judgement"] = true,
+			["Holy Strike"] = true,
+			["Seal of Righteousness"] = true,
+		},
+		cooldownDurations = {
+			["Judgement"] = fakeDurationObj,
+		},
+	})
+	c.SetCombat(true)
+	c.Fire("UNIT_SPELLCAST_SUCCEEDED", "player", "s1", 20288)
+	c.Advance(1.6)
+	c.Fire("UNIT_SPELLCAST_SUCCEEDED", "player", "j1", 20271)
+	c.Fire("UNIT_SPELLCAST_SUCCEEDED", "player", "hs1", 678)
+
+	local ui = c.ns:GetModule("UI")
+	ui:Refresh()
+
+	AssertEq(ui.cooldown:IsShown(), true, "Cooldown frame should be shown")
+	AssertEq(ui.cooldown._cdDurObj, fakeDurationObj, "Should pass server LuaDurationObject directly to SetCooldownFromDurationObject")
+	AssertEq(ui.cooldown._clearIfZero, true, "Should pass clearIfZero=true")
+end)
+
+Test("17. Low mana detection uses insufficientPower from C_Spell.IsSpellUsable", function()
+	local c = CreateEnv({
+		playerLevel = 20,
+		knownSpells = {
+			["Judgement"] = 20271,
+			["Holy Strike"] = 678,
+			["Seal of Righteousness"] = 20288,
+		},
+		usableSpells = {
+			["Judgement"] = true,
+			["Holy Strike"] = true,
+			["Seal of Righteousness"] = true,
+		},
+		noManaSpells = {
+			["Holy Strike"] = true,
+		},
+	})
+	c.SetCombat(true)
+	c.Fire("UNIT_SPELLCAST_SUCCEEDED", "player", "s1", 20288)
+	c.Advance(1.6)
+	c.Fire("UNIT_SPELLCAST_SUCCEEDED", "player", "j1", 20271) -- Judgement on CD, Holy Strike OOM
+
+	local pq = c.ns:GetModule("PriorityQueue")
+	local cur = pq:Evaluate()
+	AssertEq(cur, "Holy Strike", "OOM ready spell should still surface as current when nothing else is ready")
+	AssertEq(pq.currentNoMana, true, "PriorityQueue should flag currentNoMana=true")
+
+	local ui = c.ns:GetModule("UI")
+	ui:Refresh()
+	AssertEq(ui.status:GetText(), "Low mana", "HUD status line should display 'Low mana'")
+end)
+
+Test("18. Secret-safe mana bar passes raw UnitPower/UnitPowerMax straight to StatusBar", function()
+	local c = CreateEnv({ inCombat = true })
+	local ui = c.ns:GetModule("UI")
+	c.SetCombat(true)
+	ui:Refresh()
+
+	Assert(ui.manaBar ~= nil, "UI should create a manaBar StatusBar")
+	AssertEq(ui.manaBar:IsShown(), true, "manaBar should be shown in combat")
+	Assert(c.env.issecretvalue(ui.manaBar._val), "manaBar should accept raw secret UnitPower without Lua arithmetic")
+	Assert(c.env.issecretvalue(ui.manaBar._max), "manaBar should accept raw secret UnitPowerMax without Lua arithmetic")
+	AssertEq(c.ns.db.lastError, nil, "Secret-safe mana bar must produce zero errors")
 end)
 
 print(string.format("\nResults: %d passed, %d failed", passed, failed))

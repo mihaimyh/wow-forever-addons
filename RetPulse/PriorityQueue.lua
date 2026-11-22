@@ -45,6 +45,13 @@ local function IsUsable(name)
 	return usable and true or false
 end
 
+local function IsNoMana(name)
+	if not name or not C_Spell or not C_Spell.IsSpellUsable then return false end
+	local ok, _, insufficientPower = pcall(C_Spell.IsSpellUsable, name)
+	if not ok or insufficientPower == nil or ns.IsSecret(insufficientPower) then return false end
+	return insufficientPower and true or false
+end
+
 local function InRange(name)
 	if not name or not C_Spell or not C_Spell.IsSpellInRange then return false end
 	local ok, inRange = pcall(C_Spell.IsSpellInRange, name, "target")
@@ -386,16 +393,28 @@ function PriorityQueue:Evaluate()
 	end)
 
 	self.countdown = nil
+	self.currentNoMana = false
 	if not current then
-		-- Nothing ready: show what comes off cooldown first, greyed, with its timer.
-		-- Out of combat there is nothing to wait for, so never show a countdown.
+		-- Nothing castable right now: first check if a ready spell is blocked
+		-- specifically by insufficient mana (insufficientPower from IsSpellUsable),
+		-- otherwise show what comes off cooldown first.
 		if InCombatLockdown() then
 			for _, item in ipairs(upcoming) do
-				if item.remaining > 0 then
+				if item.remaining <= 0.2 and IsNoMana(item.name) then
 					Add(item.name, item.requiresRange)
-					self.countdown = item.remaining
+					self.currentNoMana = true
 					current = candidates[1]
 					break
+				end
+			end
+			if not current then
+				for _, item in ipairs(upcoming) do
+					if item.remaining > 0 then
+						Add(item.name, item.requiresRange)
+						self.countdown = item.remaining
+						current = candidates[1]
+						break
+					end
 				end
 			end
 		end

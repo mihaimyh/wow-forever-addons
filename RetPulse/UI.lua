@@ -17,6 +17,7 @@ local MUTED      = { 0.72, 0.70, 0.65 }
 local READY      = { 0.62, 1.00, 0.32 }
 local WARN       = { 1.00, 0.60, 0.20 }
 local OOR        = { 1.00, 0.42, 0.38 }
+local OOM        = { 0.38, 0.68, 1.00 }
 
 local PANEL_W, PANEL_H = 266, 90
 local PANEL_H_COMPACT = 68
@@ -131,6 +132,9 @@ function UI:OnLogin()
 		self:Refresh()
 	end)
 	ns:On("PLAYER_TARGET_CHANGED", function() self:Refresh() end)
+	ns:On("UNIT_POWER_UPDATE", function(_, unit)
+		if unit == "player" then self:UpdateManaBar() end
+	end)
 	ns:On("PLAYER_ENTERING_WORLD", function()
 		self.consecutiveErrors = 0
 		self:Refresh()
@@ -281,6 +285,21 @@ function UI:Build()
 	swingTick:SetColorTexture(1, 1, 1, 0.65)
 	swingTick:Hide()
 
+	-- Razor-thin secret-safe mana bar (2px sapphire strip right above swingBar).
+	-- Pipes raw UnitPower/UnitPowerMax straight into StatusBar without Lua math.
+	local manaBar = CreateFrame("StatusBar", nil, frame)
+	SetPixelHeight(manaBar, 2)
+	manaBar:SetPoint("BOTTOMLEFT", frame, "BOTTOMLEFT", 1, 5)
+	manaBar:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", -1, 5)
+	manaBar:SetStatusBarTexture("Interface\\Buttons\\WHITE8X8")
+	manaBar:SetStatusBarColor(0.24, 0.56, 0.96, 0.85)
+	manaBar:SetMinMaxValues(0, 1)
+	manaBar:SetValue(1)
+
+	local manaTrack = manaBar:CreateTexture(nil, "BACKGROUND")
+	manaTrack:SetAllPoints()
+	manaTrack:SetColorTexture(1, 1, 1, 0.06)
+
 	-- Holy glow behind the icon, used for SWAP NOW and for a seal about to expire.
 	local glow = main:CreateTexture(nil, "BACKGROUND", nil, 2)
 	glow:SetPoint("TOPLEFT", -6, 6)
@@ -353,6 +372,7 @@ function UI:Build()
 	self.cooldown = cooldown
 	self.swingBar = swingBar
 	self.swingTick = swingTick
+	self.manaBar = manaBar
 	self.glow = glow
 	self.status = status
 	self.label = label
@@ -383,6 +403,17 @@ function UI:Build()
 	end)
 
 	frame:Hide()
+end
+
+function UI:UpdateManaBar()
+	if not self.manaBar or not UnitPower or not UnitPowerMax then return end
+	local okMax, maxMana = pcall(UnitPowerMax, "player", 0)
+	local okCur, curMana = pcall(UnitPower, "player", 0)
+	if okMax and okCur and maxMana ~= nil and curMana ~= nil then
+		pcall(self.manaBar.SetMinMaxValues, self.manaBar, 0, maxMana)
+		pcall(self.manaBar.SetValue, self.manaBar, curMana)
+		self.manaBar:Show()
+	end
 end
 
 function UI:TriggerSpellPop()
@@ -579,6 +610,8 @@ function UI:RefreshInner()
 	self:SetDesiredVisible(visible, placing)
 	if not visible then return end
 
+	self:UpdateManaBar()
+
 	if self.lastPlacing ~= placing then
 		self.lastPlacing = placing
 		if placing then
@@ -677,6 +710,9 @@ function UI:RefreshInner()
 	elseif warnSeal then
 		statusText = string.format("SEAL %s", Fmt(sealLeft))
 		statusColor = WARN
+	elseif queue.currentNoMana then
+		statusText = "Low mana"
+		statusColor = OOM
 	elseif queue.currentInRange == false then
 		statusText = "Out of range"
 		statusColor = OOR
@@ -694,6 +730,8 @@ function UI:RefreshInner()
 	if not displayName then
 		desaturate = true
 		iconAlpha = 0.35
+	elseif queue.currentNoMana then
+		iconAlpha = 0.72
 	elseif queue.countdown and queue.countdown > 1.6 then
 		desaturate = true
 		iconAlpha = 0.6
@@ -703,6 +741,11 @@ function UI:RefreshInner()
 	end
 	self.mainIcon:SetDesaturated(desaturate)
 	self.mainIcon:SetAlpha(iconAlpha)
+	if queue.currentNoMana then
+		self.mainIcon:SetVertexColor(0.50, 0.70, 1.0, 1)
+	else
+		self.mainIcon:SetVertexColor(1, 1, 1, 1)
+	end
 
 	-- Echo text & color (bar value itself updates at 60 FPS in StepAnimations)
 	local maxEchoes = tracker:GetMaxEchoes()
@@ -715,24 +758,43 @@ function UI:RefreshInner()
 		self.echoText:SetText(string.format("%d/%d", echoes, maxEchoes))
 	end
 
-	-- Spell cooldown / GCD swipe: always matches the displayed spell's real cooldown.
-	local cdStart, cdDuration = queue:GetCooldownWindow(current)
-	if cdStart and cdDuration and cdDuration > 0 then
-		if self.lastCdStart ~= cdStart or self.lastCdDuration ~= cdDuration or self.lastCdSpell ~= current then
-			self.lastCdStart = cdStart
-			self.lastCdDuration = cdDuration
-			self.lastCdSpell = current
-			self.cooldown:SetCooldown(cdStart, cdDuration)
+	-- Spell cooldown / GCD swipe: prefer the server's exact LuaDurationObject
+	-- (C_Spell.GetSpellCooldownDuration -> SetCooldownFromDurationObject),
+	-- falling back to the local cooldown clock when unavailable.
+	local appliedDurationObj = false
+	if current and C_Spell and C_Spell.GetSpellCooldownDuration and self.cooldown.SetCooldownFromDurationObject then
+		local okDur, durObj = pcall(C_Spell.GetSpellCooldownDuration, current, false)
+		if okDur and durObj ~= nil then
+			local okSet = pcall(self.cooldown.SetCooldownFromDurationObject, self.cooldown, durObj, true)
+			if okSet then
+				appliedDurationObj = true
+				self.lastCdStart = nil
+				self.lastCdDuration = nil
+				self.lastCdSpell = current
+				self.cooldown:Show()
+			end
 		end
-		self.cooldown:Show()
-	else
-		if self.lastCdStart ~= nil then
-			self.lastCdStart = nil
-			self.lastCdDuration = nil
-			self.lastCdSpell = nil
-			self.cooldown:Clear()
+	end
+
+	if not appliedDurationObj then
+		local cdStart, cdDuration = queue:GetCooldownWindow(current)
+		if cdStart and cdDuration and cdDuration > 0 then
+			if self.lastCdStart ~= cdStart or self.lastCdDuration ~= cdDuration or self.lastCdSpell ~= current then
+				self.lastCdStart = cdStart
+				self.lastCdDuration = cdDuration
+				self.lastCdSpell = current
+				self.cooldown:SetCooldown(cdStart, cdDuration)
+			end
+			self.cooldown:Show()
+		else
+			if self.lastCdStart ~= nil or self.lastCdSpell ~= nil then
+				self.lastCdStart = nil
+				self.lastCdDuration = nil
+				self.lastCdSpell = nil
+				self.cooldown:Clear()
+			end
+			self.cooldown:Hide()
 		end
-		self.cooldown:Hide()
 	end
 
 	-- Swing bar color & immediate visibility sync (value animates at 60 FPS in StepAnimations)

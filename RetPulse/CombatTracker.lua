@@ -95,6 +95,21 @@ function CombatTracker:OnLogin()
 	ns:On("PLAYER_TARGET_CHANGED", function()
 		self.targetInRange = nil
 		self.targetInRangeAt = nil
+		self.targetRangeFromEvent = false
+	end)
+
+	if C_SwingTimer and C_SwingTimer.EnableRangeCheck and Enum and Enum.PlayerSwingType then
+		pcall(C_SwingTimer.EnableRangeCheck, Enum.PlayerSwingType.MainHand, true)
+	end
+
+	ns:On("PLAYER_SWING_RANGE_UPDATE", function(_, swingType, isInRange, checksRange)
+		local mainHand = Enum and Enum.PlayerSwingType and Enum.PlayerSwingType.MainHand
+		if mainHand ~= nil and swingType ~= nil and swingType ~= mainHand then return end
+		if not ns.IsReadable(checksRange) or not checksRange then return end
+		if not ns.IsReadable(isInRange) then return end
+		self.targetInRange = isInRange and true or false
+		self.targetInRangeAt = GetTime()
+		self.targetRangeFromEvent = true
 	end)
 
 	self:RefreshSeal()
@@ -534,6 +549,9 @@ function CombatTracker:ReadCdmEchoes()
 end
 
 function CombatTracker:IsInSwingRange()
+	if self.targetRangeFromEvent and self.targetInRange ~= nil then
+		return self.targetInRange
+	end
 	local now = GetTime()
 	if self.targetInRange ~= nil and self.targetInRangeAt and (now - self.targetInRangeAt) < 0.15 then
 		return self.targetInRange
