@@ -287,6 +287,8 @@ function CombatTracker:RefreshSeal()
 	-- In combat the client may hand back secret aura data; then this scan proves
 	-- nothing and must not wipe what the cast tracker already knows.
 	local sawReadable = false
+	local foundSeal = false
+	local foundBlessings = {}
 	for i = 1, 40 do
 		local ok, aura = pcall(C_UnitAuras.GetAuraDataByIndex, "player", i, "HELPFUL")
 		if not ok or not aura then break end
@@ -294,7 +296,10 @@ function CombatTracker:RefreshSeal()
 		local name = aura.name
 		if name ~= nil and not ns.IsSecret(name) then
 			sawReadable = true
-			if self:IsSealName(name) then
+			if self:IsBlessingName(name) then
+				foundBlessings[name] = true
+			elseif not foundSeal and self:IsSealName(name) then
+				foundSeal = true
 				self.activeSeal = name
 				self.activeSealID = aura.spellId
 				self.seenSeals[name] = true
@@ -305,17 +310,18 @@ function CombatTracker:RefreshSeal()
 					-- Auras may report 0 for "no expiration"; never treat that as expired.
 					self.sealExpiresAt = GetTime() + SEAL_DURATION
 				end
-				return
 			end
 		end
 	end
 
-	-- Only trust a negative scan out of combat: in combat a partly secret aura
-	-- list would otherwise wipe a seal we know from the cast event.
-	if sawReadable and not InCombatLockdown() then
-		self.activeSeal = nil
-		self.activeSealID = nil
-		self.sealExpiresAt = nil
+	-- Out of combat we scanned the full player buff list: update blessings map.
+	if not InCombatLockdown() then
+		self.activeBlessings = foundBlessings
+		if not foundSeal and sawReadable then
+			self.activeSeal = nil
+			self.activeSealID = nil
+			self.sealExpiresAt = nil
+		end
 	end
 end
 
@@ -332,6 +338,11 @@ function CombatTracker:OnSpellCast(spellID)
 	if name == ns.SPELLS.JUDGEMENT and self:GetActiveSeal() == ns.SPELLS.SEAL_CRUSADER then
 		self.judgedCrusader = true
 	end
+	if self:IsBlessingName(name) then
+		self.activeBlessings = self.activeBlessings or {}
+		self.activeBlessings[name] = true
+		return
+	end
 	if not self:IsSealName(name) then return end
 
 	self.sealCasts = (self.sealCasts or 0) + 1
@@ -346,6 +357,58 @@ end
 -- the player to cast a seal that is already up.
 function CombatTracker:IsSealName(name)
 	return type(name) == "string" and name:find("^Seal of ") ~= nil
+end
+
+function CombatTracker:IsBlessingName(name)
+	return type(name) == "string" and (name:find("^Blessing of ") ~= nil or name:find("^Greater Blessing of ") ~= nil)
+end
+
+local function IsSpellKnownByName(name)
+	if not name then return false end
+	if C_Spell and C_Spell.GetSpellIDForSpellIdentifier and C_SpellBook and C_SpellBook.IsSpellKnown then
+		local okId, id = pcall(C_Spell.GetSpellIDForSpellIdentifier, name)
+		if okId and type(id) == "number" and not ns.IsSecret(id) then
+			local okK, known = pcall(C_SpellBook.IsSpellKnown, id)
+			return okK and known and true or false
+		end
+	end
+	return false
+end
+
+function CombatTracker:GetMissingBlessing()
+	if InCombatLockdown() then return nil end
+	if UnitIsDeadOrGhost and UnitIsDeadOrGhost("player") then return nil end
+
+	local pref = (ns.db and ns.db.preferredBlessing) or "auto"
+	if pref == "off" then return nil end
+
+	local active = self.activeBlessings or {}
+
+	if pref == "auto" then
+		-- Satisfied if any Blessing (or Greater Blessing) is already on the player.
+		for _ in pairs(active) do return nil end
+		local order = {
+			ns.SPELLS.BLESSING_KINGS,
+			ns.SPELLS.BLESSING_MIGHT,
+			ns.SPELLS.BLESSING_WISDOM,
+		}
+		for _, spellName in ipairs(order) do
+			if IsSpellKnownByName(spellName) then
+				return spellName
+			end
+		end
+		return nil
+	end
+
+	local map = {
+		kings = ns.SPELLS.BLESSING_KINGS,
+		might = ns.SPELLS.BLESSING_MIGHT,
+		wisdom = ns.SPELLS.BLESSING_WISDOM,
+	}
+	local desired = map[pref]
+	if not desired or not IsSpellKnownByName(desired) then return nil end
+	if active[desired] or active["Greater " .. desired] then return nil end
+	return desired
 end
 
 function CombatTracker:IsSealAvailable(name)

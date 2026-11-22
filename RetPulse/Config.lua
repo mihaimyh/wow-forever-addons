@@ -101,6 +101,25 @@ function Config:OnInitialize()
 		self:AddCheckbox(category, "RetPulse_CrusaderBoss", "crusaderOnBoss",
 			"Crusader opener on Boss/Elite", "Recommend Seal of the Crusader + Judgement once per Boss/Elite target.")
 
+		if Settings.CreateDropdown and Settings.CreateControlTextContainer then
+			local blessSetting = Settings.RegisterAddOnSetting(category, "RetPulse_PreferredBlessing", "preferredBlessing", ns.db,
+				Settings.VarType.String, "Missing Blessing reminder", "auto")
+			self.settings["preferredBlessing"] = blessSetting
+			Settings.CreateDropdown(category, blessSetting, function()
+				local container = Settings.CreateControlTextContainer()
+				container:Add("auto", "Auto (Kings -> Might -> Wisdom)", "Remind out of combat if no Blessing is active on you.")
+				container:Add("kings", "Blessing of Kings", "Remind out of combat if Blessing of Kings is missing.")
+				container:Add("might", "Blessing of Might", "Remind out of combat if Blessing of Might is missing.")
+				container:Add("wisdom", "Blessing of Wisdom", "Remind out of combat if Blessing of Wisdom is missing.")
+				container:Add("off", "Off", "Disable missing Blessing reminders.")
+				return container:GetData()
+			end, "Remind you out of combat when your Paladin Blessing expires.")
+			blessSetting:SetValueChangedCallback(function()
+				local ui = ns:GetModule("UI")
+				if ui then ui:Refresh() end
+			end)
+		end
+
 		self:AddCheckbox(category, "RetPulse_TalentAdvisor", "talentAdvisor",
 			"Show talent recommendations", "Display RP NEXT / RP X/Y badges on the left side of talent buttons (does not overlap Zygor).", function()
 				local talents = ns:GetModule("Talents")

@@ -135,6 +135,9 @@ function UI:OnLogin()
 	ns:On("UNIT_POWER_UPDATE", function(_, unit)
 		if unit == "player" then self:UpdateManaBar() end
 	end)
+	ns:On("UNIT_AURA", function(_, unit)
+		if unit == "player" and not InCombatLockdown() then self:Refresh() end
+	end)
 	ns:On("PLAYER_ENTERING_WORLD", function()
 		self.consecutiveErrors = 0
 		self:Refresh()
@@ -603,9 +606,21 @@ function UI:RefreshInner()
 	local inCombat = self.combatFlag == true or InCombatLockdown()
 	local hasHostile = UnitExists("target") and UnitCanAttack("player", "target") and true or false
 
+	local tracker = ns:GetModule("CombatTracker")
+	local queue = ns:GetModule("PriorityQueue")
+	local engine = ns:GetModule("WeaponEngine")
+	local keybinds = ns:GetModule("Keybinds")
+
+	if not inCombat and tracker and GetTime() - (self.lastSealScan or 0) > 0.5 then
+		self.lastSealScan = GetTime()
+		tracker:RefreshSeal()
+	end
+
+	local missingBlessing = (not inCombat) and tracker and tracker.GetMissingBlessing and tracker:GetMissingBlessing() or nil
+
 	-- Unlocking reveals the HUD for a minute so it can be dragged even in combat-only mode.
 	local placing = (not db.locked) and GetTime() < (self.revealUntil or 0)
-	local visible = self:ShouldBeVisible(db, inCombat, hasHostile, placing)
+	local visible = self:ShouldBeVisible(db, inCombat, hasHostile, placing) or (missingBlessing ~= nil)
 
 	self:SetDesiredVisible(visible, placing)
 	if not visible then return end
@@ -623,17 +638,13 @@ function UI:RefreshInner()
 		end
 	end
 
-	local tracker = ns:GetModule("CombatTracker")
-	local queue = ns:GetModule("PriorityQueue")
-	local engine = ns:GetModule("WeaponEngine")
-	local keybinds = ns:GetModule("Keybinds")
-
-	if GetTime() - (self.lastSealScan or 0) > 0.5 then
-		self.lastSealScan = GetTime()
-		tracker:RefreshSeal()
-	end
-
 	local current, nextAction = queue:Evaluate()
+	if missingBlessing then
+		if current and current ~= missingBlessing then
+			nextAction = current
+		end
+		current = missingBlessing
+	end
 
 	-- With no hostile target the panel falls back to the active seal instead of
 	-- an anonymous shield, so the HUD keeps telling you something useful.
@@ -706,7 +717,10 @@ function UI:RefreshInner()
 
 	local passiveStatus = (current == nil and displayName ~= nil)
 
-	if queue.currentIsInterrupt then
+	if missingBlessing and current == missingBlessing then
+		statusText = "BUFF MISSING"
+		statusColor = WARN
+	elseif queue.currentIsInterrupt then
 		statusText = "INTERRUPT"
 		statusColor = WARN
 	elseif ready then

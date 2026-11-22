@@ -84,6 +84,9 @@ local function CreateEnv(opts)
 	spellById[2812] = "Holy Wrath"
 	spellById[853] = "Hammer of Justice"
 	spellById[21082] = "Seal of the Crusader"
+	spellById[20217] = "Blessing of Kings"
+	spellById[19834] = "Blessing of Might"
+	spellById[19850] = "Blessing of Wisdom"
 
 	local registeredFrames = {}
 	local timers = {}
@@ -201,6 +204,7 @@ local function CreateEnv(opts)
 	function env.UnitClass() return "Paladin", playerClass, 2 end
 	function env.UnitLevel() return opts.playerLevel or 20 end
 	function env.UnitName() return targetExists and "Test Mob" or nil end
+	function env.UnitIsDeadOrGhost() return false end
 	function env.UnitExists(u) return u == "target" and targetExists or true end
 	local nameplates = opts.nameplates or {}
 	function env.UnitCanAttack(_, u)
@@ -311,9 +315,11 @@ local function CreateEnv(opts)
 		end,
 	}
 
+	local playerAuras = opts.playerAuras or {}
 	env.C_UnitAuras = {
-		GetAuraDataByIndex = function()
+		GetAuraDataByIndex = function(unit, idx)
 			if inCombat then error("Auras cannot be accessed when secret") end
+			if unit == "player" then return playerAuras[idx] end
 			return nil
 		end,
 		GetPlayerAuraBySpellID = function()
@@ -438,6 +444,7 @@ local function CreateEnv(opts)
 			targetCastName = name
 			targetCastNotInt = notInt == true
 		end,
+		SetPlayerAuras = function(list) playerAuras = list end,
 		GetRangeCheckEnabled = function(st) return rangeCheckEnabled[st] end,
 		MakeFrame = MakeFrame,
 	}
@@ -1258,6 +1265,41 @@ Test("26. Passive out-of-combat seal display dims icon and shows 'Active' status
 
 	Assert(ui.status:GetText():find("^Active") ~= nil, "Passive seal status should start with 'Active', got: " .. tostring(ui.status:GetText()))
 	Assert(ui.mainIcon:GetAlpha() < 0.7, "Passive seal icon should be dimmed to distinguish from cast prompts")
+end)
+
+Test("27. Missing Blessing reminder surfaces Blessing of Kings out of combat and clears when buffed", function()
+	local c = CreateEnv({
+		inCombat = false,
+		targetExists = false,
+		knownSpells = {
+			["Blessing of Kings"] = 20217,
+			["Blessing of Might"] = 19834,
+			["Seal of Righteousness"] = 20288,
+		},
+		usableSpells = {
+			["Blessing of Kings"] = true,
+			["Blessing of Might"] = true,
+			["Seal of Righteousness"] = true,
+		},
+		playerAuras = {},
+	})
+	local tracker = c.ns:GetModule("CombatTracker")
+	local ui = c.ns:GetModule("UI")
+
+	-- No blessing active out of combat -> suggests Blessing of Kings and shows HUD
+	AssertEq(tracker:GetMissingBlessing(), "Blessing of Kings", "Auto mode should prefer Blessing of Kings over Might")
+	ui:Refresh()
+	AssertEq(ui.frame:IsShown(), true, "HUD should reveal out of combat when a Blessing is missing")
+	AssertEq(ui.label:GetText(), "Blessing of Kings", "HUD should show Blessing of Kings")
+	AssertEq(ui.status:GetText(), "BUFF MISSING", "HUD status should show BUFF MISSING")
+
+	-- Buff applied -> reminder clears and HUD fades out
+	c.SetPlayerAuras({ { name = "Blessing of Kings", spellId = 20217, expirationTime = 4600 } })
+	c.Fire("UNIT_AURA", "player")
+	AssertEq(tracker:GetMissingBlessing(), nil, "Missing blessing should clear once Blessing of Kings is active")
+	ui:Refresh()
+	ui:StepFade(1.0)
+	AssertEq(ui.frame:IsShown(), false, "HUD should hide again once Blessing is active in combat-only mode")
 end)
 
 print(string.format("\nResults: %d passed, %d failed", passed, failed))

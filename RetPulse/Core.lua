@@ -22,6 +22,9 @@ ns.SPELLS = {
 	SEAL_RIGHT      = "Seal of Righteousness",
 	SEAL_FURY       = "Seal of Fury",
 	SEAL_CRUSADER   = "Seal of the Crusader",
+	BLESSING_KINGS  = "Blessing of Kings",
+	BLESSING_MIGHT  = "Blessing of Might",
+	BLESSING_WISDOM = "Blessing of Wisdom",
 	UNSEALED_WRATH  = "Unsealed Wrath",
 }
 
@@ -39,6 +42,7 @@ local DEFAULTS = {
 	crusaderOnBoss = true,   -- recommend Seal of the Crusader opener on Elites/Bosses
 	talentAdvisor = true,    -- highlight RetPulse talents on PlayerSpellsFrame.TalentsFrame
 	talentBuild = "dps",     -- "dps" (Benediction) or "leveling" (Deflection)
+	preferredBlessing = "auto", -- "auto" (Kings->Might->Wisdom) | "kings" | "might" | "wisdom" | "off"
 	sound = true,         -- one click on SWAP NOW
 	visibility = "combat",       -- "combat" | "target" | "always"
 	showOutOfCombat = false,     -- legacy mirror of visibility
