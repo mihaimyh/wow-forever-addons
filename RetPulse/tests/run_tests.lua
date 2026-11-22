@@ -1264,6 +1264,7 @@ Test("26. Passive out-of-combat seal display dims icon and shows 'Active' status
 		},
 	})
 	c.ns.db.visibility = "always"
+	c.SetPlayerAuras({ { name = "Seal of Righteousness", spellId = 20288, sourceUnit = "player", expirationTime = 1000 + 30 * 60 } })
 	c.Fire("UNIT_SPELLCAST_SUCCEEDED", "player", "s1", 20288)
 	c.Advance(5.0)
 
@@ -1510,6 +1511,64 @@ Test("33. WeaponEngine strips melee haste to classify base weapon speed (e.g. 3.
 	AssertEq(engine:GetBracket(), "slow", "3.30s weapon under Warchief's Blessing must stay in slow bracket")
 	local rot = engine:GetRotation()
 	AssertEq(rot.primary, "Seal of Command", "Slow 3.30s weapon with SoC talent must recommend Seal of Command")
+end)
+
+Test("34. Seal swap makes the first swing the detonation swing (swingsWithSeal 3+1, not 3+2)", function()
+	local c = CreateEnv({})
+	c.ns.db.twistWithoutTalent = true
+	local tracker = c.ns:GetModule("CombatTracker")
+
+	c.Fire("UNIT_SPELLCAST_SUCCEEDED", "player", "a", 20288) -- Righteousness
+	tracker:CountEcho()
+	tracker:CountEcho()
+	tracker:CountEcho()
+	AssertEq(tracker.swingsWithSeal, 3, "Three swings in the primary seal")
+
+	c.Fire("UNIT_SPELLCAST_SUCCEEDED", "player", "b", 1311656) -- Fury
+	AssertEq(tracker.swingsWithSeal, 0, "Casting a new seal resets the swing count before the detonation")
+
+	tracker:CountEcho()
+	AssertEq(tracker.swingsWithSeal, 1, "The detonation swing is the first swing with the new seal")
+	AssertEq(tracker.echoes, 1, "Detonation consumes the old echoes; the swing itself starts a new one")
+end)
+
+Test("35. ConfirmSwing credits the seal that was active when the swing happened", function()
+	local c = CreateEnv({})
+	c.ns.db.twistWithoutTalent = true
+	local tracker = c.ns:GetModule("CombatTracker")
+
+	c.Fire("UNIT_SPELLCAST_SUCCEEDED", "player", "a", 1311656) -- Fury
+	tracker:CountEcho()
+	tracker:CountEcho()
+	AssertEq(tracker.echoes, 2, "Two echoes built under Fury")
+	c.Fire("UNIT_SPELLCAST_SUCCEEDED", "player", "b", 20288) -- back to Righteousness
+	tracker:CountEcho("Seal of Fury") -- late confirmation of a swing made under Fury
+	AssertEq(tracker.echoes, 3, "A late swing under Fury must not be judged against the new seal")
+end)
+
+Test("36. Learned cooldown never inflates from a delayed cast", function()
+	local c = CreateEnv({
+		knownSpells = { ["Judgement"] = 20271, ["Seal of Righteousness"] = 20288 },
+		usableSpells = { ["Judgement"] = true, ["Seal of Righteousness"] = true },
+	})
+	c.SetCombat(true)
+	c.Fire("UNIT_SPELLCAST_SUCCEEDED", "player", "j1", 20271)
+	c.Advance(8.0)
+	c.Fire("UNIT_SPELLCAST_SUCCEEDED", "player", "j2", 20271)
+	c.Advance(9.5)
+	c.Fire("UNIT_SPELLCAST_SUCCEEDED", "player", "j3", 20271)
+	AssertEq(c.ns.db.learnedCooldowns["Judgement"], 8.0, "A 9.5s delayed cast must not raise the learned 8s cooldown")
+end)
+
+Test("37. Off-GCD casts do not start a false global cooldown", function()
+	local c = CreateEnv({
+		knownSpells = { ["Holy Strike"] = 678, ["Avenging Wrath"] = 31884, ["Seal of Righteousness"] = 20288 },
+	})
+	local pq = c.ns:GetModule("PriorityQueue")
+	c.Fire("UNIT_SPELLCAST_SUCCEEDED", "player", "w", 31884)
+	AssertEq(pq.gcdUntil, nil, "Avenging Wrath is off the global cooldown")
+	c.Fire("UNIT_SPELLCAST_SUCCEEDED", "player", "h", 678)
+	Assert(pq.gcdUntil ~= nil, "Holy Strike spends the global cooldown")
 end)
 
 print(string.format("\nResults: %d passed, %d failed", passed, failed))

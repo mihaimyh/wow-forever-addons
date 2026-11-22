@@ -76,6 +76,18 @@ local BASE_COOLDOWN = {
 -- Judgement is off the global cooldown in Forever, so it never blocks the queue.
 local GCD = 1.5
 local OFF_GCD = { ["Judgement"] = true }
+local GCD_SPELLS = {
+	["Holy Strike"] = true,
+	["Exorcism"] = true,
+	["Hammer of Wrath"] = true,
+	["Hammer of Justice"] = true,
+	["Consecration"] = true,
+	["Holy Shock"] = true,
+	["Holy Wrath"] = true,
+	["Blessing of Kings"] = true,
+	["Blessing of Might"] = true,
+	["Blessing of Wisdom"] = true,
+}
 
 function PriorityQueue:OnLogin()
 	self.current = nil
@@ -115,15 +127,16 @@ function PriorityQueue:OnLogin()
 end
 
 function PriorityQueue:NoteCast(spellID)
-	if type(spellID) ~= "number" or not C_Spell or not C_Spell.GetSpellInfo then return end
+	if type(spellID) ~= "number" or ns.IsSecret(spellID) or not C_Spell or not C_Spell.GetSpellInfo then return end
 	local ok, info = pcall(C_Spell.GetSpellInfo, spellID)
-	if not ok or type(info) ~= "table" or type(info.name) ~= "string" then return end
+	if not ok or type(info) ~= "table" or type(info.name) ~= "string" or ns.IsSecret(info.name) then return end
 
 	local name = info.name
 	local now = GetTime()
 
-	-- Any cast except Judgement spends the global, seals included.
-	if not OFF_GCD[name] then
+	-- Only on-GCD rotation spells and seals spend the global; trinkets, racials
+	-- and cooldowns such as Avenging Wrath are off the global cooldown.
+	if GCD_SPELLS[name] or name:find("^Seal of ") then
 		self.gcdStart = now
 		self.gcdUntil = now + GCD
 	end
@@ -141,7 +154,11 @@ function PriorityQueue:NoteCast(spellID)
 	if previous then
 		local interval = now - previous
 		if interval > 2 and interval <= base then
-			self.learned[name] = interval
+			-- Keep the shortest interval seen: a delayed cast must not inflate it.
+			local known = self.learned[name]
+			if not known or interval < known then
+				self.learned[name] = interval
+			end
 		end
 	end
 	self.lastCastAt[name] = now

@@ -62,7 +62,8 @@ function WeaponEngine:RefreshTalents()
 	-- exposes it, and always allow a manual override.
 	local known = false
 	if C_SpellBook and C_SpellBook.IsSpellKnown then
-		known = C_SpellBook.IsSpellKnown(1310735) and true or false
+		local okK, isKnown = pcall(C_SpellBook.IsSpellKnown, 1310735)
+		known = okK and not ns.IsSecret(isKnown) and isKnown and true or false
 	end
 	if not known and tracker and tracker.cdmFrames and #tracker.cdmFrames > 0 then
 		known = true
@@ -74,9 +75,10 @@ function WeaponEngine:RefreshTalents()
 
 	self.hasSealOfCommand = (tracker and tracker:IsSealAvailable(ns.SPELLS.SEAL_COMMAND)) or false
 	if not self.hasSealOfCommand and C_Spell and C_Spell.GetSpellIDForSpellIdentifier and C_SpellBook and C_SpellBook.IsSpellKnown then
-		local id = C_Spell.GetSpellIDForSpellIdentifier(ns.SPELLS.SEAL_COMMAND)
-		if type(id) == "number" then
-			self.hasSealOfCommand = C_SpellBook.IsSpellKnown(id) and true or false
+		local okId, id = pcall(C_Spell.GetSpellIDForSpellIdentifier, ns.SPELLS.SEAL_COMMAND)
+		if okId and type(id) == "number" and not ns.IsSecret(id) then
+			local okK, isKnown = pcall(C_SpellBook.IsSpellKnown, id)
+			self.hasSealOfCommand = okK and not ns.IsSecret(isKnown) and isKnown and true or false
 		end
 	end
 end

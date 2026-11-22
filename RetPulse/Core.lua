@@ -70,6 +70,8 @@ local DEFAULTS = {
 	},
 }
 
+ns.DEFAULTS = DEFAULTS
+
 local function ApplyDefaults(db, defaults)
 	for k, v in pairs(defaults) do
 		if type(v) == "table" then
@@ -563,10 +565,11 @@ local function AuraProbe()
 			stacks = ns.IsSecret(aura.applications) and "SECRET" or tostring(aura.applications)
 		end
 
+		local idText = ns.IsSecret(aura.spellId) and "SECRET" or tostring(aura.spellId)
 		if name ~= nil and not ns.IsSecret(name) then
-			found[#found + 1] = name .. "[" .. tostring(aura.spellId) .. "] x" .. stacks
+			found[#found + 1] = name .. "[" .. idText .. "] x" .. stacks
 		else
-			found[#found + 1] = "|cffff5555SECRET|r[" .. tostring(aura.spellId) .. "] x" .. stacks
+			found[#found + 1] = "|cffff5555SECRET|r[" .. idText .. "] x" .. stacks
 		end
 		if #found >= 12 then break end
 	end
@@ -679,9 +682,10 @@ function ns:RunDebug()
 	Probe("CombatState", function()
 		local inCombat = InCombatLockdown()
 		local hasTarget = UnitExists("target") and UnitCanAttack("player", "target")
+		local function SafeStr(v) return ns.IsSecret(v) and "SECRET" or tostring(v) end
 		local j = C_Spell.IsSpellInRange and C_Spell.IsSpellInRange(ns.SPELLS.JUDGEMENT, "target")
 		local h = C_Spell.IsSpellInRange and C_Spell.IsSpellInRange(ns.SPELLS.HOLY_STRIKE, "target")
-		return "combat", tostring(inCombat), "target " .. tostring(hasTarget), "J " .. tostring(j) .. " HS " .. tostring(h)
+		return "combat", tostring(inCombat), "target " .. SafeStr(hasTarget), "J " .. SafeStr(j) .. " HS " .. SafeStr(h)
 	end)
 
 	Probe("Secrecy", function()

@@ -62,9 +62,9 @@ function Trace:OnLogin()
 	ns:On("UNIT_SPELLCAST_SUCCEEDED", function(_, unit, _, spellID)
 		if unit ~= "player" then return end
 		local name = "?"
-		if C_Spell and C_Spell.GetSpellInfo and type(spellID) == "number" then
+		if C_Spell and C_Spell.GetSpellInfo and type(spellID) == "number" and not ns.IsSecret(spellID) then
 			local ok, info = pcall(C_Spell.GetSpellInfo, spellID)
-			if ok and type(info) == "table" and type(info.name) == "string" then name = info.name end
+			if ok and type(info) == "table" and type(info.name) == "string" and not ns.IsSecret(info.name) then name = info.name end
 		end
 		self:Record("EVENT", "CAST", "spell=" .. name, "id=" .. Safe(spellID, "?"))
 	end)

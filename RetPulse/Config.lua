@@ -211,8 +211,10 @@ function Config:OnInitialize()
 end
 
 function Config:AddCheckbox(category, name, variable, label, tooltip, onChange)
+	local defaultValue = ns.DEFAULTS and ns.DEFAULTS[variable]
+	if defaultValue == nil then defaultValue = false end
 	local setting = Settings.RegisterAddOnSetting(category, name, variable, ns.db,
-		Settings.VarType.Boolean, label, ns.db[variable] == true)
+		Settings.VarType.Boolean, label, defaultValue == true)
 	self.settings[variable] = setting
 	Settings.CreateCheckbox(category, setting, tooltip)
 	if onChange then

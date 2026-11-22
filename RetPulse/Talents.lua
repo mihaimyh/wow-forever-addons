@@ -153,7 +153,12 @@ end
 
 local function ResolveButtonTalentName(configID, button)
 	if type(button) ~= "table" then return nil end
-	local nodeInfo = button.nodeInfo
+	if type(button.IsForbidden) == "function" then
+		local okF, forbidden = pcall(button.IsForbidden, button)
+		if not okF or forbidden then return nil end
+	end
+	local okN, nodeInfo = pcall(function() return button.nodeInfo end)
+	if not okN then return nil end
 	if type(nodeInfo) ~= "table" or type(nodeInfo.entryIDs) ~= "table" then return nil end
 	local entryID = nodeInfo.entryIDs[1]
 	if not entryID or not C_Traits or not C_Traits.GetEntryInfo or not C_Traits.GetDefinitionInfo then
@@ -302,8 +307,10 @@ function Talents:RefreshOverlay()
 		local name = ResolveButtonTalentName(configID, btn)
 		if name then
 			buttonsByName[name] = btn
-			local ranks = btn.nodeInfo and (btn.nodeInfo.ranksPurchased or btn.nodeInfo.currentRank) or 0
-			if ns.IsReadable(ranks) then
+			local okR, ranks = pcall(function()
+				return btn.nodeInfo and (btn.nodeInfo.ranksPurchased or btn.nodeInfo.currentRank) or 0
+			end)
+			if okR and ns.IsReadable(ranks) then
 				currentRanks[name] = ranks
 			end
 		end

@@ -68,7 +68,7 @@ end
 
 function FX:Burst()
 	local burst = self.burst
-	if not burst or not self.size then return end
+	if not burst or not self.size or not self:IsEnabled() then return end
 	burst:SetSize(self.size * 1.2, self.size * 1.2)
 	burst:SetAlpha(0.85)
 	burst:Show()

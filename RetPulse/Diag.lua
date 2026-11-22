@@ -66,7 +66,7 @@ function Diag:OnLogin()
 		local spellName = "?"
 		if C_Spell and C_Spell.GetSpellInfo then
 			local ok, info = pcall(C_Spell.GetSpellInfo, spellID)
-			if ok and type(info) == "table" and type(info.name) == "string" then
+			if ok and type(info) == "table" and type(info.name) == "string" and not ns.IsSecret(info.name) then
 				spellName = info.name
 			end
 		end
@@ -124,7 +124,7 @@ function Diag:Start()
 	local engine = ns:GetModule("WeaponEngine")
 	local tracker = ns:GetModule("CombatTracker")
 	self:Add("PULL", "n=" .. self.pulls,
-		"lvl=" .. tostring(UnitLevel("player")),
+		"lvl=" .. Safe(UnitLevel("player"), "?"),
 		"speed=" .. Safe(engine and engine.weaponSpeed, "secret"),
 		"bracket=" .. Safe(engine and engine:GetBracket(), "?"),
 		"uw=" .. Safe(engine and engine.hasUnsealedWrath, "?"),

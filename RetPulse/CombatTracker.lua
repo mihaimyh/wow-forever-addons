@@ -133,7 +133,7 @@ function CombatTracker:OnLogin()
 
 	ns:On("PLAYER_SWING_RANGE_UPDATE", function(_, swingType, isInRange, checksRange)
 		local mainHand = Enum and Enum.PlayerSwingType and Enum.PlayerSwingType.MainHand
-		if mainHand ~= nil and swingType ~= nil and swingType ~= mainHand then return end
+		if mainHand ~= nil and swingType ~= nil and not ns.IsSecret(swingType) and swingType ~= mainHand then return end
 		if not ns.IsReadable(checksRange) or not checksRange then return end
 		if not ns.IsReadable(isInRange) then return end
 		self.targetInRange = isInRange and true or false
@@ -173,7 +173,7 @@ function CombatTracker:OnSwing(duration, swingType)
 	if not InCombatLockdown() then return end
 
 	local mainHand = Enum and Enum.PlayerSwingType and Enum.PlayerSwingType.MainHand
-	if mainHand ~= nil and swingType ~= nil and swingType ~= mainHand then
+	if mainHand ~= nil and swingType ~= nil and not ns.IsSecret(swingType) and swingType ~= mainHand then
 		return
 	end
 
@@ -201,6 +201,12 @@ function CombatTracker:OnSwing(duration, swingType)
 
 	-- An echo is only stored by a swing that lands, and the outcome arrives as a
 	-- UNIT_COMBAT event a moment later. Count on confirmation, not on the swing.
+	-- A faster-than-window swing would overwrite the pending one and lose its
+	-- echo: settle the previous swing first.
+	if self.pendingSwing then
+		self:ConfirmSwing(self.pendingSwing)
+	end
+
 	local pending = { at = GetTime(), seal = self:GetActiveSeal(), missed = false }
 	self.pendingSwing = pending
 	C_Timer.After(MISS_WINDOW, function()
@@ -211,7 +217,7 @@ end
 -- Target-side combat result. Only misses matter here: a landed hit is the
 -- absence of a miss event, so this is a one-way flag.
 function CombatTracker:OnUnitCombat(unit, action)
-	if unit ~= "target" or not MISS_EVENTS[action] then return end
+	if unit ~= "target" or ns.IsSecret(action) or type(action) ~= "string" or not MISS_EVENTS[action] then return end
 	local pending = self.pendingSwing
 	if pending and not pending.missed and (GetTime() - pending.at) <= MISS_WINDOW then
 		pending.missed = true
@@ -228,7 +234,7 @@ function CombatTracker:ConfirmSwing(pending)
 	end
 
 	if not pending.missed then
-		self:CountEcho()
+		self:CountEcho(pending.seal)
 	end
 
 	local diag = ns:GetModule("Diag")
@@ -288,13 +294,20 @@ function CombatTracker:RefreshSeal()
 	-- nothing and must not wipe what the cast tracker already knows.
 	local sawReadable = false
 	local foundSeal = false
+	local scanComplete = false
 	local foundOwnAura = false
 	local foundAuras = {}
 	local foundBlessings = {}
 	local foundOwnBlessings = {}
 	for i = 1, 40 do
 		local ok, aura = pcall(C_UnitAuras.GetAuraDataByIndex, "player", i, "HELPFUL")
-		if not ok or not aura then break end
+		if not ok then break end
+		if not aura then
+			-- A clean, readable end of the list (even an empty one) proves the
+			-- player has no further buffs, so a cancelled seal can be cleared.
+			scanComplete = true
+			break
+		end
 
 		local name = aura.name
 		if name ~= nil and not ns.IsSecret(name) then
@@ -329,7 +342,7 @@ function CombatTracker:RefreshSeal()
 		self.ownBlessings = foundOwnBlessings
 		self.activeAuras = foundAuras
 		self.hasOwnAura = foundOwnAura
-		if not foundSeal and sawReadable then
+		if not foundSeal and (sawReadable or scanComplete) then
 			self.activeSeal = nil
 			self.activeSealID = nil
 			self.sealExpiresAt = nil
@@ -340,11 +353,11 @@ end
 -- Cast tracking is the in-combat fallback: cast events and spell IDs stay
 -- readable even when aura names are secret.
 function CombatTracker:OnSpellCast(spellID)
-	if type(spellID) ~= "number" then return end
+	if type(spellID) ~= "number" or ns.IsSecret(spellID) then return end
 	if not C_Spell or not C_Spell.GetSpellInfo then return end
 
 	local ok, info = pcall(C_Spell.GetSpellInfo, spellID)
-	if not ok or type(info) ~= "table" or type(info.name) ~= "string" then return end
+	if not ok or type(info) ~= "table" or type(info.name) ~= "string" or ns.IsSecret(info.name) then return end
 
 	local name = info.name
 	if name == ns.SPELLS.JUDGEMENT and self:GetActiveSeal() == ns.SPELLS.SEAL_CRUSADER then
@@ -361,6 +374,11 @@ function CombatTracker:OnSpellCast(spellID)
 
 	self.sealCasts = (self.sealCasts or 0) + 1
 	self.lastCastName = name
+	-- Swapping seals starts a fresh "swings with this seal" count: the
+	-- detonation swing has not happened yet.
+	if self.activeSeal ~= name then
+		self.swingsWithSeal = 0
+	end
 	self.activeSeal = name
 	self.activeSealID = spellID
 	self.seenSeals[name] = true
@@ -463,9 +481,12 @@ function CombatTracker:IsSealAvailable(name)
 	if not name then return false end
 	if self.seenSeals[name] then return true end
 	if C_Spell and C_Spell.GetSpellIDForSpellIdentifier and C_SpellBook and C_SpellBook.IsSpellKnown then
-		local id = C_Spell.GetSpellIDForSpellIdentifier(name)
-		if type(id) == "number" then
-			return C_SpellBook.IsSpellKnown(id) and true or false
+		local okId, id = pcall(C_Spell.GetSpellIDForSpellIdentifier, name)
+		if okId and type(id) == "number" and not ns.IsSecret(id) then
+			local okKnown, known = pcall(C_SpellBook.IsSpellKnown, id)
+			if okKnown and not ns.IsSecret(known) then
+				return known and true or false
+			end
 		end
 	end
 	return false
@@ -523,6 +544,13 @@ function CombatTracker:ReadAuraEchoes()
 		self.auraReadable = true
 		if cdmStacks > MAX_ECHOES then cdmStacks = MAX_ECHOES end
 		return cdmStacks
+	end
+
+	-- Raw player auras throw while tainted in combat; the Cooldown Manager above
+	-- is the only in-combat source. Fall back to the cast model otherwise.
+	if InCombatLockdown() then
+		self.auraReadable = false
+		return nil
 	end
 
 	if not C_UnitAuras or not C_UnitAuras.GetPlayerAuraBySpellID then return nil end
@@ -658,6 +686,12 @@ function CombatTracker:RefreshCdm()
 	self.cdmFrames = frames
 	self.cdmReport = string.format("ids=%d frames=%d scanned=%d ok=%s",
 		idCount, #frames, scanned, tostring(okScan))
+
+	-- The Unsealed Wrath fallback depends on the CDM frames: tell the engine.
+	local engine = ns:GetModule("WeaponEngine")
+	if engine and engine.RefreshTalents and #frames > 0 and not engine.hasUnsealedWrath then
+		engine:RefreshTalents()
+	end
 end
 
 function CombatTracker:ReadCdmEchoes()
@@ -717,7 +751,7 @@ function CombatTracker:IsInSwingRange()
 	return self.targetInRange
 end
 
-function CombatTracker:CountEcho()
+function CombatTracker:CountEcho(sealOverride)
 	local engine = ns:GetModule("WeaponEngine")
 	local db = ns.db or {}
 	local hasUnsealedWrath = (engine and engine.hasUnsealedWrath == true) or (db.twistWithoutTalent == true)
@@ -729,16 +763,17 @@ function CombatTracker:CountEcho()
 		return
 	end
 
-	local seal = self:GetActiveSeal()
+	local seal = sealOverride or self:GetActiveSeal()
 	if not seal then
 		self.echoes = 0
 		return
 	end
 
 	-- A different seal than the one on the previous swing consumed every echo.
+	-- That swing is itself the first swing with the new seal (the detonation).
 	if self.lastSealAtSwing ~= nil and self.lastSealAtSwing ~= seal then
 		self.echoes = 0
-		self.swingsWithSeal = 0
+		self.swingsWithSeal = 1
 	else
 		self.swingsWithSeal = (self.swingsWithSeal or 0) + 1
 	end
@@ -824,11 +859,14 @@ function CombatTracker:GetMeleeEnemyCount()
 		local ok, plates = pcall(C_NamePlate.GetNamePlates)
 		if ok and type(plates) == "table" then
 			for _, plate in ipairs(plates) do
-				local unit = type(plate) == "table" and ReadFieldSafe(plate, "namePlateUnitToken") or nil
+				local unit = type(plate) == "table" and not IsFrameForbidden(plate) and ReadFieldSafe(plate, "namePlateUnitToken") or nil
 				if type(unit) == "string" and not ns.IsSecret(unit) then
-					local hostile = UnitCanAttack and UnitCanAttack("player", unit)
-					local dead = UnitIsDead and UnitIsDead(unit)
-					local fighting = (not UnitAffectingCombat) or UnitAffectingCombat(unit)
+					local okH, hostile = pcall(UnitCanAttack, "player", unit)
+					local okD, dead = pcall(UnitIsDead, unit)
+					local okF, fighting = pcall(UnitAffectingCombat, unit)
+					hostile = okH and not ns.IsSecret(hostile) and hostile
+					dead = okD and not ns.IsSecret(dead) and dead
+					fighting = (not okF) or ns.IsSecret(fighting) or fighting
 					if hostile and not dead and fighting then
 						local inMelee = false
 						if C_Spell and C_Spell.IsSpellInRange then
@@ -856,7 +894,9 @@ function CombatTracker:IsTargetCastingInterruptible()
 	if UnitCastingInfo then
 		local ok, castName, _, _, _, _, _, _, notInterruptible = pcall(UnitCastingInfo, "target")
 		if ok and castName ~= nil then
-			if ns.IsReadable(notInterruptible) and notInterruptible == true then
+			-- A secret flag cannot be proven interruptible: stay silent rather
+			-- than flash a false INTERRUPT on an uninterruptible boss cast.
+			if not ns.IsReadable(notInterruptible) or notInterruptible == true then
 				return false
 			end
 			return true
@@ -865,7 +905,7 @@ function CombatTracker:IsTargetCastingInterruptible()
 	if UnitChannelInfo then
 		local ok, chanName, _, _, _, _, _, notInterruptible = pcall(UnitChannelInfo, "target")
 		if ok and chanName ~= nil then
-			if ns.IsReadable(notInterruptible) and notInterruptible == true then
+			if not ns.IsReadable(notInterruptible) or notInterruptible == true then
 				return false
 			end
 			return true
