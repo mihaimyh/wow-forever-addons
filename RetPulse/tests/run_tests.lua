@@ -1654,6 +1654,55 @@ Test("38. Click-to-cast arms the secure button out of combat only, and not while
 	AssertEq(attrs.type, nil, "Disabled option must clear the button")
 end)
 
+Test("39. Auto-AoE detects 2+ melee enemies via Blizzard unitToken and NAME_PLATE_UNIT_ADDED", function()
+	local plates = {
+		{ unitToken = "nameplate1", IsForbidden = function() return false end },
+		{ unitToken = "nameplate2", IsForbidden = function() return false end },
+	}
+	local c = CreateEnv({
+		inCombat = true,
+		knownSpells = {
+			["Judgement"] = 20271,
+			["Holy Strike"] = 678,
+			["Consecration"] = 26573,
+			["Seal of Righteousness"] = 20288,
+		},
+		usableSpells = {
+			["Judgement"] = true,
+			["Holy Strike"] = true,
+			["Consecration"] = true,
+			["Seal of Righteousness"] = true,
+		},
+		nameplates = {
+			{ unit = "nameplate1", hostile = true, inCombat = true, inRange = true },
+			{ unit = "nameplate2", hostile = true, inCombat = true, inRange = true },
+			{ unit = "nameplate3", hostile = true, inCombat = true, inRange = true },
+			{ unit = "nameplate4", hostile = true, inCombat = true, inRange = true },
+		},
+	})
+	c.env.C_NamePlate.GetNamePlates = function() return plates end
+	c.Fire("UNIT_SPELLCAST_SUCCEEDED", "player", "s1", 20288)
+	c.Advance(2.0)
+
+	local pq = c.ns:GetModule("PriorityQueue")
+	pq.cdUntil["Judgement"] = c.env.GetTime() + 5.0
+	local cur = pq:Evaluate()
+	AssertEq(cur, "Consecration", "2+ enemies on plate.unitToken must trigger Consecration")
+
+	-- Also works via NAME_PLATE_UNIT_ADDED/REMOVED even if GetNamePlates is empty
+	plates = {}
+	c.Advance(0.5)
+	c.Fire("NAME_PLATE_UNIT_ADDED", "nameplate3")
+	c.Fire("NAME_PLATE_UNIT_ADDED", "nameplate4")
+	cur = pq:Evaluate()
+	AssertEq(cur, "Consecration", "NAME_PLATE_UNIT_ADDED must trigger Consecration")
+
+	c.Fire("NAME_PLATE_UNIT_REMOVED", "nameplate4")
+	c.Advance(0.5)
+	cur = pq:Evaluate()
+	AssertEq(cur, "Holy Strike", "Removing a nameplate below 2 enemies must return to Holy Strike")
+end)
+
 print(string.format("\nResults: %d passed, %d failed", passed, failed))
 if failed > 0 then
 	os.exit(1)

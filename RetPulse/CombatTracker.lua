@@ -141,6 +141,20 @@ function CombatTracker:OnLogin()
 		self.targetRangeFromEvent = true
 	end)
 
+	self.activeNameplates = {}
+	ns:On("NAME_PLATE_UNIT_ADDED", function(_, unit)
+		if type(unit) == "string" and not ns.IsSecret(unit) then
+			self.activeNameplates[unit] = true
+			self.meleeEnemyCountAt = nil
+		end
+	end)
+	ns:On("NAME_PLATE_UNIT_REMOVED", function(_, unit)
+		if type(unit) == "string" and not ns.IsSecret(unit) then
+			self.activeNameplates[unit] = nil
+			self.meleeEnemyCountAt = nil
+		end
+	end)
+
 	self:RefreshSeal()
 end
 
@@ -829,30 +843,61 @@ function CombatTracker:GetMeleeEnemyCount()
 		return self.meleeEnemyCount
 	end
 
-	local count = 0
+	local units = {}
+	if self.activeNameplates then
+		for unit in pairs(self.activeNameplates) do
+			units[unit] = true
+		end
+	end
 	if C_NamePlate and C_NamePlate.GetNamePlates then
 		local ok, plates = pcall(C_NamePlate.GetNamePlates)
 		if ok and type(plates) == "table" then
 			for _, plate in ipairs(plates) do
-				local unit = type(plate) == "table" and not IsFrameForbidden(plate) and ReadFieldSafe(plate, "namePlateUnitToken") or nil
-				if type(unit) == "string" and not ns.IsSecret(unit) then
-					local okH, hostile = pcall(UnitCanAttack, "player", unit)
-					local okD, dead = pcall(UnitIsDead, unit)
-					local okF, fighting = pcall(UnitAffectingCombat, unit)
-					hostile = okH and not ns.IsSecret(hostile) and hostile
-					dead = okD and not ns.IsSecret(dead) and dead
-					fighting = (not okF) or ns.IsSecret(fighting) or fighting
-					if hostile and not dead and fighting then
-						local inMelee = false
-						if C_Spell and C_Spell.IsSpellInRange then
-							local okR, r = pcall(C_Spell.IsSpellInRange, ns.SPELLS.HOLY_STRIKE, unit)
-							if okR and ns.IsReadable(r) and r then inMelee = true end
-						end
-						if inMelee then
-							count = count + 1
+				if type(plate) == "table" and not IsFrameForbidden(plate) then
+					-- Mainline 12.x / Forever uses plate.unitToken (NamePlateBaseMixin);
+					-- keep namePlateUnitToken & UnitFrame.unit as fallbacks.
+					local unit = ReadFieldSafe(plate, "unitToken")
+						or ReadFieldSafe(plate, "namePlateUnitToken")
+					if not unit then
+						local uf = ReadFieldSafe(plate, "UnitFrame")
+						if type(uf) == "table" then
+							unit = ReadFieldSafe(uf, "unit")
 						end
 					end
+					if type(unit) == "string" and not ns.IsSecret(unit) then
+						units[unit] = true
+					end
 				end
+			end
+		end
+	end
+
+	local count = 0
+	for unit in pairs(units) do
+		local okH, hostile = pcall(UnitCanAttack, "player", unit)
+		local okD, dead = pcall(UnitIsDead, unit)
+		local okF, fighting = pcall(UnitAffectingCombat, unit)
+		hostile = okH and not ns.IsSecret(hostile) and hostile
+		dead = okD and not ns.IsSecret(dead) and dead
+		fighting = (not okF) or ns.IsSecret(fighting) or fighting
+		if hostile and not dead and fighting then
+			local inMelee = false
+			if C_Spell and C_Spell.IsSpellInRange then
+				local okR, r = pcall(C_Spell.IsSpellInRange, ns.SPELLS.HOLY_STRIKE, unit)
+				if okR and ns.IsReadable(r) then
+					inMelee = r and true or false
+				end
+			end
+			if not inMelee and CheckInteractDistance then
+				-- Index 3 (~10 yd) closely matches Consecration's 8 yd radius when
+				-- IsSpellInRange returns nil/secret for a nameplate unit.
+				local okC, close = pcall(CheckInteractDistance, unit, 3)
+				if okC and ns.IsReadable(close) and close then
+					inMelee = true
+				end
+			end
+			if inMelee then
+				count = count + 1
 			end
 		end
 	end
