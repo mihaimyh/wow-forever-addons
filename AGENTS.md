@@ -11,6 +11,7 @@ Guidelines for agents building and maintaining addons in this repository (`RetPu
   ```powershell
   npx --yes --package=fengari-node-cli fengari tests/run_tests.lua
   ```
+- Local MCP server (`wow-forever-mcp`, source in `mcp-server/index.mjs`): use `client_status`, `read_saved_vars`, `read_lua_errors`, `search_wow_api`, `read_framexml`, and `validate_addon` when debugging SavedVariables, inspecting exported `16001` API docs, or validating addons.
 
 ## WoW: Forever Client Reality (Probed on `1.60.1 build 70938`, TOC `16001`)
 

@@ -9,3 +9,6 @@ Thumbs.db
 # Logs & temp files
 *.log
 *.tmp
+
+# MCP server dependencies
+mcp-server/node_modules/

@@ -1,0 +1,11 @@
+{
+  "name": "wow-forever-mcp",
+  "version": "1.0.0",
+  "description": "Local, read-only MCP server for debugging and validating World of Warcraft: Forever (16001) addons.",
+  "type": "module",
+  "main": "index.mjs",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.12.1",
+    "zod": "^3.24.2"
+  }
+}
