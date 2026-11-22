@@ -1,0 +1,11 @@
+## Interface: 16001
+## Title: ChatCopy
+## Notes: Clean, secret-safe chat copy button and /copy window for WoW: Forever.
+## Author: mdumi
+## Version: 1.0.0
+## IconTexture: Interface\Icons\INV_Misc_Note_01
+## AddonCompartmentFunc: ChatCopy_OnCompartmentClick
+## AddonCompartmentFuncOnEnter: ChatCopy_OnCompartmentEnter
+## AddonCompartmentFuncOnLeave: ChatCopy_OnCompartmentLeave
+
+ChatCopy.lua

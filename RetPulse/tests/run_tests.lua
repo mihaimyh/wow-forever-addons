@@ -1,0 +1,803 @@
+-- Offline unit & integration test suite for RetPulse (WoW: Forever 16001)
+-- Not listed in RetPulse.toc, so WoW never loads this file.
+
+local passed = 0
+local failed = 0
+
+local function Assert(cond, msg)
+	if not cond then
+		error("ASSERTION FAILED: " .. tostring(msg), 2)
+	end
+end
+
+local function AssertEq(actual, expected, msg)
+	if actual ~= expected then
+		error(string.format("ASSERTION FAILED: %s (expected=%s, actual=%s)",
+			tostring(msg), tostring(expected), tostring(actual)), 2)
+	end
+end
+
+-------------------------------------------------------------------------------
+-- Mock WoW: Forever (Mainline 12.x / Camelot 16001) runtime
+-------------------------------------------------------------------------------
+local function CreateEnv(opts)
+	opts = opts or {}
+	local now = opts.now or 1000.0
+	local inCombat = opts.inCombat or false
+	local playerClass = opts.playerClass or "PALADIN"
+	local weaponSpeed = opts.weaponSpeed or 2.87
+	local weaponSpeedSecret = opts.weaponSpeedSecret or false
+	local weaponItemID = opts.weaponItemID or 279864
+	local targetExists = opts.targetExists ~= false
+	local targetHostile = opts.targetHostile ~= false
+	local targetDead = opts.targetDead or false
+	local targetType = opts.targetType or "Humanoid"
+	local swingInRange = opts.swingInRange
+	if swingInRange == nil then swingInRange = true end
+
+	local knownSpells = opts.knownSpells or {
+		["Judgement"] = 20271,
+		["Holy Strike"] = 678,
+		["Seal of Righteousness"] = 20288,
+		["Seal of Fury"] = 1311656,
+	}
+	local usableSpells = opts.usableSpells or {
+		["Judgement"] = true,
+		["Holy Strike"] = true,
+		["Seal of Righteousness"] = true,
+		["Seal of Fury"] = true,
+	}
+	local inRangeSpells = opts.inRangeSpells or {
+		["Judgement"] = true,
+		["Holy Strike"] = true,
+		["Exorcism"] = true,
+		["Hammer of Wrath"] = true,
+	}
+	local actionSlots = opts.actionSlots or {}
+	local bindings = opts.bindings or {}
+
+	local SECRET_TAG = {}
+	local function MakeSecret(v)
+		return setmetatable({ __secret = true, val = v }, {
+			__tostring = function() error("secret value converted to string") end,
+		})
+	end
+
+	local function IsSecretValue(v)
+		return type(v) == "table" and rawget(v, "__secret") == true
+	end
+
+	local spellById = {}
+	for name, id in pairs(knownSpells) do
+		spellById[id] = name
+	end
+	spellById[1310735] = "Unsealed Wrath"
+	spellById[20375] = "Seal of Command"
+	spellById[20271] = "Judgement"
+	spellById[678] = "Holy Strike"
+	spellById[20288] = "Seal of Righteousness"
+	spellById[1311656] = "Seal of Fury"
+	spellById[26573] = "Consecration"
+	spellById[879] = "Exorcism"
+	spellById[24275] = "Hammer of Wrath"
+	spellById[20473] = "Holy Shock"
+	spellById[2812] = "Holy Wrath"
+
+	local registeredFrames = {}
+	local timers = {}
+
+	local function MakeRegion()
+		local r = { _shown = true, _alpha = 1, _text = "", _points = {} }
+		function r:SetPoint(...) self._points[1] = { ... } end
+		function r:ClearAllPoints() self._points = {} end
+		function r:GetPoint(i)
+			local p = self._points[i or 1]
+			if not p then return nil end
+			return p[1], p[2], p[3], p[4], p[5]
+		end
+		function r:SetAllPoints() end
+		function r:SetSize(w, h) self._w, self._h = w, h end
+		function r:SetWidth(w) self._w = w end
+		function r:SetHeight(h) self._h = h end
+		function r:GetWidth() return self._w or 0 end
+		function r:GetHeight() return self._h or 0 end
+		function r:SetColorTexture() end
+		function r:SetTexture(t) self._tex = t end
+		function r:SetTexCoord() end
+		function r:SetRotation() end
+		function r:SetBlendMode() end
+		function r:SetVertexColor() end
+		function r:SetDesaturated() end
+		function r:SetAlpha(a) self._alpha = a end
+		function r:GetAlpha() return self._alpha end
+		function r:Show() self._shown = true end
+		function r:Hide() self._shown = false end
+		function r:SetShown(v) self._shown = v and true or false end
+		function r:IsShown() return self._shown end
+		function r:SetText(t) self._text = t end
+		function r:GetText() return self._text end
+		function r:SetTextColor() end
+		function r:SetJustifyH() end
+		function r:SetWordWrap() end
+		function r:SetShadowOffset() end
+		function r:SetShadowColor() end
+		return r
+	end
+
+	local function MakeFrame(frameType)
+		local f = MakeRegion()
+		f._events = {}
+		f._scripts = {}
+		f._children = {}
+		f._level = 1
+		f._scale = 1
+		function f:RegisterEvent(ev) self._events[ev] = true end
+		function f:UnregisterEvent(ev) self._events[ev] = nil end
+		function f:UnregisterAllEvents() self._events = {} end
+		function f:SetScript(name, fn) self._scripts[name] = fn end
+		function f:GetScript(name) return self._scripts[name] end
+		function f:CreateTexture() return MakeRegion() end
+		function f:CreateFontString() return MakeRegion() end
+		function f:SetBackdrop() end
+		function f:SetBackdropColor() end
+		function f:SetBackdropBorderColor() end
+		function f:SetMovable() end
+		function f:EnableMouse() end
+		function f:RegisterForDrag() end
+		function f:SetClampedToScreen() end
+		function f:SetClipsChildren() end
+		function f:StartMoving() end
+		function f:StopMovingOrSizing() end
+		function f:SetScale(s) self._scale = s end
+		function f:GetScale() return self._scale end
+		function f:GetFrameLevel() return self._level end
+		function f:SetFrameLevel(l) self._level = l end
+		function f:SetStatusBarTexture() end
+		function f:SetStatusBarColor() end
+		function f:SetMinMaxValues() end
+		function f:SetValue(v) self._val = v end
+		function f:SetDrawEdge() end
+		function f:SetDrawBling() end
+		function f:SetHideCountdownNumbers() end
+		function f:SetSwipeColor() end
+		function f:SetCooldown(start, dur) self._cdStart, self._cdDur = start, dur end
+		function f:Clear() self._cdStart, self._cdDur = nil, nil end
+		function f:IsForbidden() return false end
+		function f:GetChildren() return table.unpack(self._children) end
+		registeredFrames[#registeredFrames + 1] = f
+		return f
+	end
+
+	local env = {
+		WOW_PROJECT_ID = 18,
+		WOW_PROJECT_CAMELOT = 18,
+		Enum = { PlayerSwingType = { MainHand = 0, OffHand = 1 } },
+		SOUNDKIT = { IG_MAINMENU_OPTION_CHECKBOX_ON = 856 },
+		SlashCmdList = {},
+		UIParent = MakeFrame("Frame"),
+		GameTooltip = MakeFrame("GameTooltip"),
+		RetPulseDB = opts.savedDB,
+		BuffIconCooldownViewer = nil,
+		BuffBarCooldownViewer = nil,
+		EssentialCooldownViewer = nil,
+		UtilityCooldownViewer = nil,
+	}
+
+	function env.strtrim(s) return (s:gsub("^%s+", ""):gsub("%s+$", "")) end
+	function env.date() return "2026-11-22 02:00:00" end
+	function env.GetTime() return now end
+	function env.GetBuildInfo() return "1.60.1", "70938", "Nov 12 2026", 16001 end
+	function env.InCombatLockdown() return inCombat end
+	function env.IsInInstance() return false end
+	function env.issecretvalue(v) return IsSecretValue(v) end
+	function env.issecrettable(v) return IsSecretValue(v) end
+	function env.CreateFrame(ft) return MakeFrame(ft) end
+	function env.PlaySound() end
+	function env.UnitClass() return "Paladin", playerClass, 2 end
+	function env.UnitLevel() return opts.playerLevel or 20 end
+	function env.UnitName() return targetExists and "Test Mob" or nil end
+	function env.UnitExists(u) return u == "target" and targetExists or true end
+	function env.UnitCanAttack() return targetExists and targetHostile end
+	function env.UnitIsDead() return targetDead end
+	function env.UnitCreatureType() return targetExists and targetType or nil end
+	function env.UnitClassification() return "normal" end
+	function env.UnitPower() return MakeSecret(500) end
+	function env.UnitHealth() return MakeSecret(1000) end
+	function env.GetInventoryItemID() return weaponItemID end
+	function env.UnitAttackSpeed()
+		if weaponSpeedSecret then return MakeSecret(weaponSpeed) end
+		return weaponSpeed
+	end
+	function env.GetActionInfo(slot)
+		local entry = actionSlots[slot]
+		if not entry then return nil end
+		return entry.type, entry.id
+	end
+	function env.GetBindingKey(cmd) return bindings[cmd] end
+	function env.print() end
+
+	env.C_Spell = {
+		GetSpellIDForSpellIdentifier = function(name)
+			return knownSpells[name]
+		end,
+		GetSpellInfo = function(idOrName)
+			if type(idOrName) == "number" then
+				local nm = spellById[idOrName]
+				if nm then return { name = nm, spellID = idOrName } end
+				return nil
+			elseif type(idOrName) == "string" then
+				return { name = idOrName, spellID = knownSpells[idOrName] or 0 }
+			end
+		end,
+		GetSpellTexture = function(name) return name and ("tex:" .. name) or nil end,
+		IsSpellUsable = function(name) return usableSpells[name] == true, false end,
+		IsSpellInRange = function(name) return inRangeSpells[name] == true end,
+		GetSpellCooldown = function(name)
+			if inCombat then
+				return { startTime = MakeSecret(0), duration = MakeSecret(0), isEnabled = true }
+			end
+			return { startTime = 0, duration = 0, isEnabled = true }
+		end,
+	}
+
+	env.C_SpellBook = {
+		IsSpellKnown = function(id)
+			for _, knownId in pairs(knownSpells) do
+				if knownId == id then return true end
+			end
+			return false
+		end,
+	}
+
+	env.C_UnitAuras = {
+		GetAuraDataByIndex = function()
+			if inCombat then error("Auras cannot be accessed when secret") end
+			return nil
+		end,
+		GetPlayerAuraBySpellID = function()
+			if inCombat then error("Auras cannot be accessed when secret") end
+			return nil
+		end,
+	}
+
+	env.C_SwingTimer = {
+		IsTargetWithinSwingRange = function() return swingInRange end,
+	}
+
+	env.C_CooldownViewer = opts.cdmAPI or {
+		GetCooldownViewerCategorySet = function() return {} end,
+		GetCooldownViewerCooldownInfo = function() return nil end,
+	}
+
+	env.C_Timer = {
+		After = function(delay, fn)
+			timers[#timers + 1] = { at = now + delay, fn = fn, cancelled = false }
+		end,
+		NewTicker = function(interval, fn)
+			local t = { cancelled = false }
+			function t:Cancel() self.cancelled = true end
+			return t
+		end,
+	}
+
+	env.Settings = {
+		VarType = { Boolean = "boolean", String = "string", Number = "number" },
+		RegisterVerticalLayoutCategory = function(name)
+			local cat = { _id = 1, GetID = function(self) return self._id end }
+			local layout = { AddInitializer = function() end }
+			return cat, layout
+		end,
+		RegisterAddOnSetting = function(cat, name, var, tbl, varType, label, default)
+			local s = { _var = var, _tbl = tbl }
+			function s:SetValueChangedCallback(cb) self._cb = cb end
+			function s:SetValue(v) self._tbl[self._var] = v end
+			return s
+		end,
+		CreateCheckbox = function() end,
+		CreateDropdown = function() end,
+		CreateControlTextContainer = function()
+			return { Add = function() end, GetData = function() return {} end }
+		end,
+		CreateSliderOptions = function()
+			return { SetLabelFormatter = function() end }
+		end,
+		CreateSlider = function() end,
+		RegisterAddOnCategory = function() end,
+		OpenToCategory = function() end,
+	}
+
+	-- Populate globals onto _G for the loaded chunks
+	setmetatable(env, { __index = _G })
+	env._G = env
+
+	local ns = {}
+	local files = {
+		"Core.lua",
+		"Keybinds.lua",
+		"WeaponEngine.lua",
+		"CombatTracker.lua",
+		"PriorityQueue.lua",
+		"Diag.lua",
+		"Trace.lua",
+		"FX.lua",
+		"UI.lua",
+		"Config.lua",
+	}
+
+	for _, file in ipairs(files) do
+		local chunk, err = loadfile(file, "t", env)
+		if not chunk then
+			error("Failed to load " .. file .. ": " .. tostring(err))
+		end
+		chunk("RetPulse", ns)
+	end
+
+	local ctrl
+	ctrl = {
+		env = env,
+		ns = ns,
+		Fire = function(event, ...)
+			for _, f in ipairs(registeredFrames) do
+				if f._events[event] and f._scripts.OnEvent then
+					f._scripts.OnEvent(f, event, ...)
+				end
+			end
+		end,
+		Advance = function(dt)
+			now = now + dt
+			local due = {}
+			local keep = {}
+			for _, t in ipairs(timers) do
+				if not t.cancelled and t.at <= now then
+					due[#due + 1] = t
+				elseif not t.cancelled then
+					keep[#keep + 1] = t
+				end
+			end
+			timers = keep
+			for _, t in ipairs(due) do t.fn() end
+		end,
+		SetCombat = function(v)
+			inCombat = v
+			ctrl.Fire(v and "PLAYER_REGEN_DISABLED" or "PLAYER_REGEN_ENABLED")
+		end,
+		SetWeaponSpeedSecret = function(v) weaponSpeedSecret = v end,
+		SetSwingInRange = function(v) swingInRange = v end,
+		SetTargetType = function(t) targetType = t end,
+		SetWeaponItemID = function(id) weaponItemID = id end,
+		MakeFrame = MakeFrame,
+	}
+
+	ctrl.Fire("ADDON_LOADED", "RetPulse")
+	ctrl.Fire("PLAYER_LOGIN")
+	return ctrl
+end
+
+local function Test(name, fn)
+	local ok, err = pcall(fn)
+	if ok then
+		passed = passed + 1
+		print("[PASS] " .. name)
+	else
+		failed = failed + 1
+		print("[FAIL] " .. name .. "\n       " .. tostring(err))
+	end
+end
+
+-------------------------------------------------------------------------------
+-- Test cases
+-------------------------------------------------------------------------------
+
+Test("1. Non-Paladin class gating skips initialization", function()
+	local c = CreateEnv({ playerClass = "WARRIOR" })
+	AssertEq(c.ns.IsPaladin, false, "IsPaladin should be false for Warrior")
+	AssertEq(c.ns.db, nil, "db should not be initialized for Warrior")
+	local ui = c.ns:GetModule("UI")
+	AssertEq(ui.frame, nil, "UI frame should not be created for Warrior")
+end)
+
+Test("2. Level 20 Ret vs Humanoid never recommends unlearned Exorcism or HoW", function()
+	local c = CreateEnv({
+		playerLevel = 20,
+		targetType = "Humanoid",
+		knownSpells = {
+			["Judgement"] = 20271,
+			["Holy Strike"] = 678,
+			["Seal of Righteousness"] = 20288,
+			["Seal of Fury"] = 1311656,
+		},
+		usableSpells = {
+			["Judgement"] = true,
+			["Holy Strike"] = true,
+			["Seal of Righteousness"] = true,
+			["Seal of Fury"] = true,
+		},
+	})
+	c.SetCombat(true)
+	-- Cast Seal of Righteousness, Judgement, Holy Strike so both are on CD and GCD is active
+	c.Fire("UNIT_SPELLCAST_SUCCEEDED", "player", "cast1", 20288)
+	c.Advance(1.6)
+	c.Fire("UNIT_SPELLCAST_SUCCEEDED", "player", "cast2", 20271)
+	c.Fire("UNIT_SPELLCAST_SUCCEEDED", "player", "cast3", 678)
+
+	local pq = c.ns:GetModule("PriorityQueue")
+	local cur = pq:Evaluate()
+	Assert(cur ~= "Exorcism", "Must NEVER recommend unlearned Exorcism on Humanoid, got: " .. tostring(cur))
+	Assert(cur ~= "Hammer of Wrath", "Must NEVER recommend unlearned Hammer of Wrath, got: " .. tostring(cur))
+	Assert(cur == "Judgement" or cur == "Holy Strike", "Fallback countdown should be Judgement or Holy Strike, got: " .. tostring(cur))
+end)
+
+Test("3. Exorcism recommended on Undead when known", function()
+	local c = CreateEnv({
+		playerLevel = 40,
+		targetType = "Undead",
+		knownSpells = {
+			["Judgement"] = 20271,
+			["Holy Strike"] = 678,
+			["Exorcism"] = 879,
+			["Seal of Righteousness"] = 20288,
+		},
+		usableSpells = {
+			["Judgement"] = true,
+			["Holy Strike"] = true,
+			["Exorcism"] = true,
+			["Seal of Righteousness"] = true,
+		},
+	})
+	c.SetCombat(true)
+	c.Fire("UNIT_SPELLCAST_SUCCEEDED", "player", "c1", 20288)
+	c.Advance(1.6)
+	c.Fire("UNIT_SPELLCAST_SUCCEEDED", "player", "c2", 20271)
+	c.Fire("UNIT_SPELLCAST_SUCCEEDED", "player", "c3", 678)
+	c.Advance(1.6)
+
+	local pq = c.ns:GetModule("PriorityQueue")
+	local cur = pq:Evaluate()
+	AssertEq(cur, "Exorcism", "Exorcism should be recommended on Undead when J & HS are on CD")
+end)
+
+Test("4. Safety: Judgement is NEVER recommended while Seal of Fury is up", function()
+	local c = CreateEnv({
+		playerLevel = 20,
+		knownSpells = {
+			["Judgement"] = 20271,
+			["Holy Strike"] = 678,
+			["Seal of Fury"] = 1311656,
+			["Seal of Righteousness"] = 20288,
+		},
+		usableSpells = {
+			["Judgement"] = true,
+			["Holy Strike"] = true,
+			["Seal of Fury"] = true,
+			["Seal of Righteousness"] = true,
+		},
+	})
+	c.SetCombat(true)
+	c.Fire("UNIT_SPELLCAST_SUCCEEDED", "player", "c1", 1311656) -- Seal of Fury
+	c.Advance(1.6)
+
+	local pq = c.ns:GetModule("PriorityQueue")
+	local cur = pq:Evaluate()
+	Assert(cur ~= "Judgement", "Judgement must NEVER be recommended while Seal of Fury is active")
+	AssertEq(cur, "Holy Strike", "Should recommend Holy Strike instead of Judgement")
+
+	-- Put Holy Strike on CD too: fallback countdown must STILL not recommend Judgement!
+	c.Fire("UNIT_SPELLCAST_SUCCEEDED", "player", "c2", 678)
+	local cur2 = pq:Evaluate()
+	Assert(cur2 ~= "Judgement", "Judgement must NEVER appear in countdown fallback while Seal of Fury is active")
+end)
+
+Test("5. WeaponEngine keeps last readable weaponSpeed when secret in combat", function()
+	local c = CreateEnv({ weaponSpeed = 3.5 })
+	local engine = c.ns:GetModule("WeaponEngine")
+	AssertEq(engine.weaponSpeed, 3.5, "Initial weaponSpeed should be 3.5")
+	AssertEq(engine:GetBracket(), "slow", "Initial bracket should be slow")
+
+	c.SetCombat(true)
+	c.SetWeaponSpeedSecret(true)
+	c.Fire("UNIT_ATTACK_SPEED", "player")
+	AssertEq(engine.weaponSpeed, 3.5, "weaponSpeed must not be wiped to nil when secret in combat")
+	AssertEq(engine:GetBracket(), "slow", "Bracket must remain slow in combat")
+end)
+
+Test("6. RefreshCdm survives forbidden frames and finds BuffIconCooldownViewer child", function()
+	local forbiddenFrame = {
+		IsForbidden = function() return true end,
+		GetChildren = function() error("forbidden!") end,
+	}
+	setmetatable(forbiddenFrame, {
+		__index = function(_, k)
+			if k == "IsForbidden" then return function() return true end end
+			error("attempt to index forbidden frame: " .. tostring(k))
+		end,
+	})
+
+	local cdmChild = {
+		cooldownID = 42,
+		IsForbidden = function() return false end,
+		itemData = {
+			cooldownID = 42,
+			auraDataCached = { applications = 2, expirationTime = 1015 },
+		},
+	}
+
+	local c = CreateEnv({
+		cdmAPI = {
+			GetCooldownViewerCategorySet = function(cat)
+				if cat == 0 then return { 42 } end
+				return {}
+			end,
+			GetCooldownViewerCooldownInfo = function(id)
+				if id == 42 then return { spellID = 1310735 } end
+				return nil
+			end,
+		},
+	})
+
+	local viewer = c.MakeFrame("Frame")
+	viewer._children = { forbiddenFrame, cdmChild }
+	c.env.BuffIconCooldownViewer = viewer
+
+	local tracker = c.ns:GetModule("CombatTracker")
+	tracker:RefreshCdm()
+	Assert(tracker.cdmReport:find("ok=true") ~= nil, "cdmReport should be ok=true, got: " .. tostring(tracker.cdmReport))
+	AssertEq(#tracker.cdmFrames, 1, "Should find the 1 Cooldown Manager frame")
+	AssertEq(tracker:ReadCdmEchoes(), 2, "Should read 2 echoes from Cooldown Manager frame")
+end)
+
+Test("7. IsInSwingRange updates dynamically without changing targets", function()
+	local c = CreateEnv({ swingInRange = false })
+	local tracker = c.ns:GetModule("CombatTracker")
+	AssertEq(tracker:IsInSwingRange(), false, "Initially out of melee range")
+
+	c.SetSwingInRange(true)
+	c.Advance(0.2)
+	AssertEq(tracker:IsInSwingRange(), true, "Should update to in-range once player closes distance")
+end)
+
+Test("8. Unsealed Wrath echoes: miss ignored, weapon swap clears, 3 stacks triggers twist", function()
+	local c = CreateEnv({
+		playerLevel = 60,
+		weaponSpeed = 3.6,
+		knownSpells = {
+			["Unsealed Wrath"] = 1310735,
+			["Seal of Command"] = 20375,
+			["Seal of Righteousness"] = 20288,
+			["Judgement"] = 20271,
+			["Holy Strike"] = 678,
+		},
+		usableSpells = {
+			["Seal of Command"] = true,
+			["Seal of Righteousness"] = true,
+			["Judgement"] = true,
+			["Holy Strike"] = true,
+		},
+	})
+	local tracker = c.ns:GetModule("CombatTracker")
+	local pq = c.ns:GetModule("PriorityQueue")
+	c.SetCombat(true)
+
+	-- Cast primary seal (Seal of Command for slow 3.6 weapon)
+	c.Fire("UNIT_SPELLCAST_SUCCEEDED", "player", "s1", 20375)
+	c.Advance(1.6)
+
+	-- Swing 1: lands -> 1 echo
+	c.Fire("PLAYER_SWING", 3.6, 0)
+	-- Duplicate mid-cycle swing must be rejected
+	c.Advance(0.5)
+	c.Fire("PLAYER_SWING", 3.6, 0)
+	AssertEq(tracker.swingRejected, 1, "Mid-cycle duplicate swing should be rejected")
+	c.Advance(0.5) -- > MISS_WINDOW
+	AssertEq(tracker:GetEchoes(), 1, "1st landed swing -> 1 echo")
+
+	-- Swing 2: missed (DODGE) -> still 1 echo
+	c.Advance(3.0)
+	c.Fire("PLAYER_SWING", 3.6, 0)
+	c.Advance(0.1)
+	c.Fire("UNIT_COMBAT", "target", "DODGE")
+	c.Advance(1.0)
+	AssertEq(tracker:GetEchoes(), 1, "Dodged swing must not add an echo")
+
+	-- Swings 3 & 4: land -> 3 echoes
+	c.Advance(3.0)
+	c.Fire("PLAYER_SWING", 3.6, 0)
+	c.Advance(1.0)
+	AssertEq(tracker:GetEchoes(), 2, "2 echoes")
+
+	c.Advance(3.0)
+	c.Fire("PLAYER_SWING", 3.6, 0)
+	c.Advance(1.0)
+	AssertEq(tracker:GetEchoes(), 3, "3 echoes")
+
+	-- Remaining swing time is 2.6s (> 1.5s GCD) -> should recommend twist to Seal of Righteousness!
+	local cur = pq:Evaluate()
+	AssertEq(cur, "Seal of Righteousness", "At 3 echoes with open swing window, must recommend secondary seal")
+
+	-- Weapon swap wipes echoes
+	c.SetWeaponItemID(999999)
+	c.Fire("UNIT_INVENTORY_CHANGED", "player")
+	AssertEq(tracker:GetEchoes(), 0, "Main-hand weapon swap must clear all echoes")
+end)
+
+Test("9. Keybinds module scans action bars and formats short labels", function()
+	local c = CreateEnv({
+		actionSlots = {
+			[1] = { type = "spell", id = 20271 }, -- Judgement
+			[2] = { type = "spell", id = 678 },   -- Holy Strike
+			[61] = { type = "spell", id = 20288 }, -- Seal of Righteousness
+		},
+		bindings = {
+			ACTIONBUTTON1 = "SHIFT-1",
+			ACTIONBUTTON2 = "MOUSEWHEELDOWN",
+			MULTIACTIONBAR1BUTTON1 = "CTRL-R",
+		},
+	})
+	local kb = c.ns:GetModule("Keybinds")
+	AssertEq(kb:GetForSpell("Judgement"), "S1", "SHIFT-1 -> S1")
+	AssertEq(kb:GetForSpell("Holy Strike"), "MWD", "MOUSEWHEELDOWN -> MWD")
+	AssertEq(kb:GetForSpell("Seal of Righteousness"), "CR", "CTRL-R -> CR")
+end)
+
+Test("10. UI visibility modes, unlock reveal, and single enabled state", function()
+	local c = CreateEnv({ inCombat = false, targetExists = false })
+	local ui = c.ns:GetModule("UI")
+	AssertEq(c.ns.db.visibility, "combat", "Default visibility is combat")
+	AssertEq(ui.frame:IsShown(), false, "Hidden out of combat by default")
+
+	-- Combat starts -> HUD shows immediately
+	c.SetCombat(true)
+	AssertEq(ui.frame:IsShown(), true, "HUD must show immediately on PLAYER_REGEN_DISABLED")
+
+	-- Combat ends -> fades out and hides
+	c.SetCombat(false)
+	ui:StepFade(1.0)
+	AssertEq(ui.frame:IsShown(), false, "HUD hides after fade-out")
+
+	-- Slash /rp unlock reveals HUD even out of combat
+	c.ns:HandleSlash("unlock")
+	AssertEq(ui.frame:IsShown(), true, "Unlocking must reveal HUD for placement")
+
+	-- Addon compartment toggle disables cleanly via ns.db.enabled
+	c.ns.ToggleVisibility()
+	AssertEq(c.ns.db.enabled, false, "ToggleVisibility toggles ns.db.enabled")
+	AssertEq(ui.frame:IsShown(), false, "Disabling hides HUD immediately")
+end)
+
+Test("11. Trace defaults off and flushes on PLAYER_LOGOUT", function()
+	local c = CreateEnv({})
+	AssertEq(c.ns.db.traceEnabled, false, "traceEnabled should default to false")
+	AssertEq(c.ns.db.logEnabled, false, "logEnabled should default to false")
+
+	c.ns:HandleSlash("trace on")
+	local trace = c.ns:GetModule("Trace")
+	AssertEq(trace.enabled, true, "trace should start on /rp trace on")
+	c.Fire("PLAYER_LOGOUT")
+	Assert(c.ns.db.traceLog and #c.ns.db.traceLog > 0, "PLAYER_LOGOUT must flush traceLog to SavedVariables")
+end)
+
+Test("12. Cooldown swipe matches spell cooldown (10s), never weapon swing speed (2.87s)", function()
+	local c = CreateEnv({
+		playerLevel = 20,
+		weaponSpeed = 2.87,
+		knownSpells = {
+			["Judgement"] = 20271,
+			["Holy Strike"] = 678,
+			["Seal of Righteousness"] = 20288,
+		},
+		usableSpells = {
+			["Judgement"] = true,
+			["Holy Strike"] = true,
+			["Seal of Righteousness"] = true,
+		},
+	})
+	c.SetCombat(true)
+	c.Fire("UNIT_SPELLCAST_SUCCEEDED", "player", "s1", 20288) -- Seal of Righteousness
+	c.Advance(1.6)
+	c.Fire("PLAYER_SWING", 2.87, 0)
+	c.Fire("UNIT_SPELLCAST_SUCCEEDED", "player", "c1", 20271) -- Judgement (10s CD)
+	c.Fire("UNIT_SPELLCAST_SUCCEEDED", "player", "c2", 678)   -- Holy Strike (10s CD)
+
+	local ui = c.ns:GetModule("UI")
+	ui:Refresh()
+
+	AssertEq(ui.cooldown:IsShown(), true, "Cooldown swipe should be shown while waiting on spell CD")
+	AssertEq(ui.cooldown._cdDur, 10, "Cooldown swipe duration must match spell cooldown (10s), not swing (2.87s)")
+	AssertEq(ui.swingBar:IsShown(), true, "Swing timer should be shown on the separate bottom bar")
+end)
+
+Test("13. NEXT spell preview populates when current is ready or on cooldown", function()
+	local c = CreateEnv({
+		playerLevel = 20,
+		knownSpells = {
+			["Judgement"] = 20271,
+			["Holy Strike"] = 678,
+			["Seal of Righteousness"] = 20288,
+		},
+		usableSpells = {
+			["Judgement"] = false, -- not usable until seal is cast
+			["Holy Strike"] = true,
+			["Seal of Righteousness"] = true,
+		},
+	})
+	local pq = c.ns:GetModule("PriorityQueue")
+	c.SetCombat(true)
+
+	-- No seal up: current = Seal of Righteousness, next = Judgement (or Holy Strike)
+	local cur, nxt = pq:Evaluate()
+	AssertEq(cur, "Seal of Righteousness", "Missing seal should be current")
+	Assert(nxt == "Judgement" or nxt == "Holy Strike", "Next should preview upcoming combat spell, got: " .. tostring(nxt))
+
+	-- Cast Seal, then Judgement (10s CD), advance 2s, cast Holy Strike (10s CD):
+	-- Judgement comes up first (8s left), Holy Strike is second (10s left)
+	c.Fire("UNIT_SPELLCAST_SUCCEEDED", "player", "s1", 20288)
+	c.Advance(1.6)
+	c.Fire("UNIT_SPELLCAST_SUCCEEDED", "player", "c1", 20271)
+	c.Advance(2.0)
+	c.Fire("UNIT_SPELLCAST_SUCCEEDED", "player", "c2", 678)
+
+	local cur2, nxt2 = pq:Evaluate()
+	AssertEq(cur2, "Judgement", "Judgement should be soonest off CD")
+	AssertEq(nxt2, "Holy Strike", "Holy Strike should be shown in NEXT slot")
+end)
+
+Test("14. Execute (HoW) > AoE (Consecration/Holy Wrath) > Holy Strike > Holy Shock", function()
+	local c = CreateEnv({
+		playerLevel = 60,
+		targetType = "Undead",
+		knownSpells = {
+			["Judgement"] = 20271,
+			["Holy Strike"] = 678,
+			["Hammer of Wrath"] = 24275,
+			["Consecration"] = 26573,
+			["Holy Wrath"] = 2812,
+			["Holy Shock"] = 20473,
+			["Seal of Righteousness"] = 20288,
+		},
+		usableSpells = {
+			["Judgement"] = true,
+			["Holy Strike"] = true,
+			["Hammer of Wrath"] = true,
+			["Consecration"] = true,
+			["Holy Wrath"] = true,
+			["Holy Shock"] = true,
+			["Seal of Righteousness"] = true,
+		},
+	})
+	local pq = c.ns:GetModule("PriorityQueue")
+	c.SetCombat(true)
+	c.Fire("UNIT_SPELLCAST_SUCCEEDED", "player", "s1", 20288) -- Seal
+	c.Advance(1.6)
+	c.Fire("UNIT_SPELLCAST_SUCCEEDED", "player", "j1", 20271) -- Judgement on CD
+
+	-- Hammer of Wrath must beat Holy Strike in execute range
+	local cur1 = pq:Evaluate()
+	AssertEq(cur1, "Hammer of Wrath", "Hammer of Wrath should outrank Holy Strike when usable")
+
+	-- Put HoW on CD, enable AoE -> Consecration must beat Holy Strike
+	c.Fire("UNIT_SPELLCAST_SUCCEEDED", "player", "h1", 24275)
+	c.Advance(1.6)
+	c.ns.db.aoe = true
+	local cur2 = pq:Evaluate()
+	AssertEq(cur2, "Consecration", "Consecration should outrank Holy Strike when AoE is enabled")
+
+	-- Put Consecration on CD -> Holy Wrath on Undead should beat Holy Strike
+	c.Fire("UNIT_SPELLCAST_SUCCEEDED", "player", "c1", 26573)
+	c.Advance(1.6)
+	local cur3 = pq:Evaluate()
+	AssertEq(cur3, "Holy Wrath", "Holy Wrath should be recommended on Undead packs in AoE")
+
+	-- Put Holy Wrath & Holy Strike on CD (and refresh HoW CD) -> Holy Shock fills when known
+	c.Fire("UNIT_SPELLCAST_SUCCEEDED", "player", "w1", 2812)
+	c.Advance(1.6)
+	c.Fire("UNIT_SPELLCAST_SUCCEEDED", "player", "h2", 24275)
+	c.Advance(1.6)
+	c.Fire("UNIT_SPELLCAST_SUCCEEDED", "player", "hs1", 678)
+	c.Advance(1.6)
+	local cur4 = pq:Evaluate()
+	AssertEq(cur4, "Holy Shock", "Holy Shock should fill when talented and other spells are on CD")
+end)
+
+print(string.format("\nResults: %d passed, %d failed", passed, failed))
+if failed > 0 then
+	os.exit(1)
+end

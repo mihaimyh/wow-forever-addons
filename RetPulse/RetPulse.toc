@@ -1,0 +1,21 @@
+## Interface: 16001
+## Title: RetPulse
+## Notes: Retribution Paladin rotation advisor and Unsealed Wrath echo tracker for WoW: Forever.
+## Author: mdumi
+## Version: 1.3.0
+## SavedVariables: RetPulseDB
+## IconTexture: Interface\Icons\Spell_Holy_SealOfWisdom
+## AddonCompartmentFunc: RetPulse_OnCompartmentClick
+## AddonCompartmentFuncOnEnter: RetPulse_OnCompartmentEnter
+## AddonCompartmentFuncOnLeave: RetPulse_OnCompartmentLeave
+
+Core.lua
+Keybinds.lua
+WeaponEngine.lua
+CombatTracker.lua
+PriorityQueue.lua
+Diag.lua
+Trace.lua
+FX.lua
+UI.lua
+Config.lua
