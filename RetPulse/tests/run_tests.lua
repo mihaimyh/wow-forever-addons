@@ -1194,32 +1194,44 @@ Test("25. TalentAdvisor attaches RP NEXT badge on PlayerSpellsFrame.TalentsFrame
 	btnJudgement.nodeInfo = { ranksPurchased = 0, maxRanks = 2, entryIDs = { 102 } }
 	btnJudgement.CanAfford = function() return false end
 
+	local btnPursuit = c.MakeFrame("Button")
+	btnPursuit.nodeInfo = { ranksPurchased = 2, maxRanks = 2, entryIDs = { 103 } }
+	btnPursuit.CanAfford = function() return false end
+
 	local talentsFrame = c.MakeFrame("Frame")
 	talentsFrame._shown = true
 	talentsFrame.IsVisible = function() return true end
 	talentsFrame.configurationInfo = { ID = 1 }
-	talentsFrame.nodeIDToButton = { [1] = btnBenediction, [2] = btnJudgement }
+	talentsFrame.nodeIDToButton = { [1] = btnBenediction, [2] = btnJudgement, [3] = btnPursuit }
 	c.env.PlayerSpellsFrame = { TalentsFrame = talentsFrame }
 
 	c.env.C_Traits = {
 		GetEntryInfo = function(_, entryID) return { definitionID = entryID } end,
-		GetDefinitionInfo = function(defID) return { spellID = defID == 101 and 9001 or 9002 } end,
+		GetDefinitionInfo = function(defID)
+			if defID == 101 then return { spellID = 9001 } end
+			if defID == 102 then return { spellID = 9002 } end
+			return { spellID = 9003 }
+		end,
 	}
 	local origGetSpellInfo = c.env.C_Spell.GetSpellInfo
 	c.env.C_Spell.GetSpellInfo = function(id)
 		if id == 9001 then return { name = "Benediction" } end
 		if id == 9002 then return { name = "Improved Judgement" } end
+		if id == 9003 then return { name = "Pursuit of Justice" } end
 		return origGetSpellInfo(id)
 	end
 
 	talents:RefreshOverlay()
 	local overlayNext = talents.activeOverlays["Benediction"]
 	local overlayPlanned = talents.activeOverlays["Improved Judgement"]
+	local overlayDone = talents.activeOverlays["Pursuit of Justice"]
 
 	Assert(overlayNext ~= nil, "Should attach RP overlay to next recommended talent")
 	AssertEq(overlayNext.badgeText:GetText(), "RP NEXT", "Next talent badge must be clearly branded 'RP NEXT'")
 	Assert(overlayPlanned ~= nil, "Should attach RP overlay to future planned talent")
 	AssertEq(overlayPlanned.badgeText:GetText(), "RP 0/2", "Planned talent badge must show 'RP 0/2'")
+	Assert(overlayDone ~= nil, "Should attach RP checkmark overlay to completed talent in build")
+	Assert(overlayDone.badgeText:GetText():find("ReadyCheck%-Ready") ~= nil, "Completed badge must render WoW native checkmark icon")
 end)
 
 print(string.format("\nResults: %d passed, %d failed", passed, failed))

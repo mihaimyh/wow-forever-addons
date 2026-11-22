@@ -9,7 +9,9 @@ local Talents = ns:NewModule("Talents")
 
 local GOLD  = { 0.94, 0.78, 0.38 }
 local READY = { 0.62, 1.00, 0.32 }
+local DONE  = { 0.38, 0.85, 0.52 }
 local DARK  = { 0.04, 0.04, 0.06 }
+local DONE_TEXT = "RP |TInterface\\RaidFrame\\ReadyCheck-Ready:10:10|t"
 
 -- Ordered 51-point builds (Retribution 31 -> Unsealed Wrath + Holy 20).
 local BUILDS = {
@@ -298,12 +300,18 @@ function Talents:RefreshOverlay()
 	for name, targetRank in pairs(plan.targets) do
 		local btn = buttonsByName[name]
 		local cur = currentRanks[name] or 0
-		if btn and cur < targetRank then
-			local isNext = (name == plan.nextTalent)
+		if btn then
 			local overlay = self:AcquireOverlay(btn)
-
 			overlay.pill:ClearAllPoints()
-			if isNext then
+
+			if cur >= targetRank then
+				overlay:SetBackdropBorderColor(DONE[1], DONE[2], DONE[3], 0.40)
+				overlay.pill:SetPoint("BOTTOMLEFT", overlay, "BOTTOMLEFT", -4, -6)
+				overlay.pill:SetSize(34, 14)
+				overlay.pill:SetBackdropBorderColor(DONE[1], DONE[2], DONE[3], 0.65)
+				overlay.badgeText:SetTextColor(DONE[1], DONE[2], DONE[3])
+				overlay.badgeText:SetText(DONE_TEXT)
+			elseif name == plan.nextTalent then
 				overlay:SetBackdropBorderColor(READY[1], READY[2], READY[3], 0.95)
 				overlay.pill:SetPoint("TOPLEFT", overlay, "TOPLEFT", -6, 10)
 				overlay.pill:SetSize(52, 15)
