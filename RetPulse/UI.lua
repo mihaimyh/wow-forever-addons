@@ -606,7 +606,9 @@ function UI:BuildClickCast(frame, main, cooldown)
 	if not ok or not btn then return end
 	btn:SetAllPoints(main)
 	btn:SetFrameLevel(cooldown:GetFrameLevel() + 4)
-	btn:RegisterForClicks("LeftButtonUp")
+	-- Register both edges: with the ActionButtonUseKeyDown CVar on, the secure
+	-- handler only fires on the down edge and ignores an up-only registration.
+	btn:RegisterForClicks("LeftButtonDown", "LeftButtonUp")
 	btn:RegisterForDrag("LeftButton")
 	btn:HookScript("OnDragStart", function()
 		if ns.db and not ns.db.locked then frame:StartMoving() end
@@ -635,7 +637,7 @@ function UI:UpdateClickCast(spell)
 	if not btn or InCombatLockdown() then return end
 	local db = ns.db or {}
 	local want = nil
-	if spell and db.clickToCast ~= false and db.locked then
+	if spell and db.clickToCast ~= false then
 		want = spell
 	end
 	if want == self.clickSpell then return end

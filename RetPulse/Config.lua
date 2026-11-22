@@ -29,7 +29,7 @@ function Config:OnInitialize()
 			end)
 
 		self:AddCheckbox(category, "RetPulse_ClickToCast", "clickToCast",
-			"Click-to-cast out of combat", "Click the main HUD icon to cast the recommended spell (Blessing, Aura, Seal). Disabled in combat and while the HUD is unlocked.", function()
+			"Click-to-cast out of combat", "Click the main HUD icon to cast the recommended spell (Blessing, Aura, Seal). Disabled in combat.", function()
 				local ui = ns:GetModule("UI")
 				if ui then ui:Refresh() end
 			end)

@@ -1595,7 +1595,7 @@ Test("38. Click-to-cast arms the secure button out of combat only, and not while
 	c.SetCombat(false)
 	c.ns.db.locked = false
 	ui:UpdateClickCast("Holy Strike")
-	AssertEq(attrs.type, nil, "An unlocked HUD must not cast on click (click-drag moves it)")
+	AssertEq(attrs.spell, "Holy Strike", "A click casts even while unlocked; dragging still moves the HUD")
 
 	c.ns.db.locked = true
 	c.ns.db.clickToCast = false
