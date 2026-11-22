@@ -1,0 +1,49 @@
+name: Test & Release RetPulse
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "RetPulse/**"
+      - ".pkgmeta"
+      - ".github/workflows/release-retpulse.yml"
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  test:
+    name: Run RetPulse Unit Tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Run offline Lua tests (fengari)
+        working-directory: RetPulse
+        run: npx --yes --package=fengari-node-cli fengari tests/run_tests.lua
+
+  release:
+    name: Package & Publish to CurseForge
+    needs: test
+    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Package & upload with BigWigsMods/packager
+        uses: BigWigsMods/packager@v2
+        env:
+          CF_API_KEY: ${{ secrets.CF_API_KEY }}
+          GITHUB_OAUTH: ${{ secrets.GITHUB_TOKEN }}

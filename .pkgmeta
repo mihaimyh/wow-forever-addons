@@ -1,0 +1,15 @@
+package-as: RetPulse
+
+move-folders:
+  RetPulse/RetPulse: RetPulse
+
+ignore:
+  - .github
+  - .gitignore
+  - .gitattributes
+  - AGENTS.md
+  - README.md
+  - ChatCopy
+  - mcp-server
+  - RetPulse/tests
+  - RetPulse/SPEC.md
