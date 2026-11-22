@@ -704,6 +704,8 @@ function UI:RefreshInner()
 	local statusText = ""
 	local statusColor = GOLD
 
+	local passiveStatus = (current == nil and displayName ~= nil)
+
 	if queue.currentIsInterrupt then
 		statusText = "INTERRUPT"
 		statusColor = WARN
@@ -725,6 +727,9 @@ function UI:RefreshInner()
 	elseif queue.countdown and queue.countdown > 0 then
 		statusText = string.format("Ready in %s", Fmt(queue.countdown))
 		statusColor = MUTED
+	elseif passiveStatus and sealLeft then
+		statusText = string.format("Active  %s", Fmt(sealLeft))
+		statusColor = { 0.45, 0.85, 0.55 }
 	elseif activeSeal and sealLeft then
 		statusText = string.format("%s  %s", activeSeal:gsub("^Seal of ", ""), Fmt(sealLeft))
 		statusColor = MUTED
@@ -736,6 +741,8 @@ function UI:RefreshInner()
 	if not displayName then
 		desaturate = true
 		iconAlpha = 0.35
+	elseif passiveStatus then
+		iconAlpha = 0.55
 	elseif queue.currentNoMana then
 		iconAlpha = 0.72
 	elseif queue.countdown and queue.countdown > 1.6 then

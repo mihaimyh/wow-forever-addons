@@ -1234,6 +1234,32 @@ Test("25. TalentAdvisor attaches RP NEXT badge on PlayerSpellsFrame.TalentsFrame
 	Assert(overlayDone.badgeText:GetText():find("ReadyCheck%-Ready") ~= nil, "Completed badge must render WoW native checkmark icon")
 end)
 
+Test("26. Passive out-of-combat seal display dims icon and shows 'Active' status", function()
+	local c = CreateEnv({
+		inCombat = false,
+		targetExists = false,
+		knownSpells = {
+			["Seal of Righteousness"] = 20288,
+			["Judgement"] = 20271,
+			["Holy Strike"] = 678,
+		},
+		usableSpells = {
+			["Seal of Righteousness"] = true,
+			["Judgement"] = true,
+			["Holy Strike"] = true,
+		},
+	})
+	c.ns.db.visibility = "always"
+	c.Fire("UNIT_SPELLCAST_SUCCEEDED", "player", "s1", 20288)
+	c.Advance(5.0)
+
+	local ui = c.ns:GetModule("UI")
+	ui:Refresh()
+
+	Assert(ui.status:GetText():find("^Active") ~= nil, "Passive seal status should start with 'Active', got: " .. tostring(ui.status:GetText()))
+	Assert(ui.mainIcon:GetAlpha() < 0.7, "Passive seal icon should be dimmed to distinguish from cast prompts")
+end)
+
 print(string.format("\nResults: %d passed, %d failed", passed, failed))
 if failed > 0 then
 	os.exit(1)
