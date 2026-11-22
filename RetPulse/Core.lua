@@ -25,6 +25,9 @@ ns.SPELLS = {
 	BLESSING_KINGS  = "Blessing of Kings",
 	BLESSING_MIGHT  = "Blessing of Might",
 	BLESSING_WISDOM = "Blessing of Wisdom",
+	AURA_RETRIBUTION = "Retribution Aura",
+	AURA_SANCTITY    = "Sanctity Aura",
+	AURA_DEVOTION    = "Devotion Aura",
 	UNSEALED_WRATH  = "Unsealed Wrath",
 }
 
@@ -43,6 +46,7 @@ local DEFAULTS = {
 	talentAdvisor = true,    -- highlight RetPulse talents on PlayerSpellsFrame.TalentsFrame
 	talentBuild = "dps",     -- "dps" (Benediction) or "leveling" (Deflection)
 	preferredBlessing = "auto", -- "auto" (Kings->Might->Wisdom) | "kings" | "might" | "wisdom" | "off"
+	remindAura = true,          -- remind out of combat if no Paladin Aura is active
 	sound = true,         -- one click on SWAP NOW
 	visibility = "combat",       -- "combat" | "target" | "always"
 	showOutOfCombat = false,     -- legacy mirror of visibility

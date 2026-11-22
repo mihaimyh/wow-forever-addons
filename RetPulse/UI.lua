@@ -617,10 +617,11 @@ function UI:RefreshInner()
 	end
 
 	local missingBlessing = (not inCombat) and tracker and tracker.GetMissingBlessing and tracker:GetMissingBlessing() or nil
+	local missingAura = (not inCombat) and tracker and tracker.GetMissingAura and tracker:GetMissingAura() or nil
 
 	-- Unlocking reveals the HUD for a minute so it can be dragged even in combat-only mode.
 	local placing = (not db.locked) and GetTime() < (self.revealUntil or 0)
-	local visible = self:ShouldBeVisible(db, inCombat, hasHostile, placing) or (missingBlessing ~= nil)
+	local visible = self:ShouldBeVisible(db, inCombat, hasHostile, placing) or (missingBlessing ~= nil) or (missingAura ~= nil)
 
 	self:SetDesiredVisible(visible, placing)
 	if not visible then return end
@@ -640,10 +641,17 @@ function UI:RefreshInner()
 
 	local current, nextAction = queue:Evaluate()
 	if missingBlessing then
-		if current and current ~= missingBlessing then
+		if missingAura then
+			nextAction = missingAura
+		elseif current and current ~= missingBlessing then
 			nextAction = current
 		end
 		current = missingBlessing
+	elseif missingAura then
+		if current and current ~= missingAura then
+			nextAction = current
+		end
+		current = missingAura
 	end
 
 	-- With no hostile target the panel falls back to the active seal instead of
@@ -719,6 +727,9 @@ function UI:RefreshInner()
 
 	if missingBlessing and current == missingBlessing then
 		statusText = "BUFF MISSING"
+		statusColor = WARN
+	elseif missingAura and current == missingAura then
+		statusText = "AURA MISSING"
 		statusColor = WARN
 	elseif queue.currentIsInterrupt then
 		statusText = "INTERRUPT"

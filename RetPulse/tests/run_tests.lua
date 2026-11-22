@@ -87,6 +87,8 @@ local function CreateEnv(opts)
 	spellById[20217] = "Blessing of Kings"
 	spellById[19834] = "Blessing of Might"
 	spellById[19850] = "Blessing of Wisdom"
+	spellById[7294] = "Retribution Aura"
+	spellById[465] = "Devotion Aura"
 
 	local registeredFrames = {}
 	local timers = {}
@@ -1300,6 +1302,46 @@ Test("27. Missing Blessing reminder surfaces Blessing of Kings out of combat and
 	ui:Refresh()
 	ui:StepFade(1.0)
 	AssertEq(ui.frame:IsShown(), false, "HUD should hide again once Blessing is active in combat-only mode")
+end)
+
+Test("28. Missing Paladin Aura reminder surfaces Retribution Aura out of combat and clears when any Aura is up", function()
+	local c = CreateEnv({
+		inCombat = false,
+		targetExists = false,
+		knownSpells = {
+			["Retribution Aura"] = 7294,
+			["Devotion Aura"] = 465,
+			["Blessing of Kings"] = 20217,
+		},
+		usableSpells = {
+			["Retribution Aura"] = true,
+			["Devotion Aura"] = true,
+			["Blessing of Kings"] = true,
+		},
+		playerAuras = {
+			{ name = "Blessing of Kings", spellId = 20217, expirationTime = 4600 },
+		},
+	})
+	local tracker = c.ns:GetModule("CombatTracker")
+	local ui = c.ns:GetModule("UI")
+
+	-- Blessing is up, but NO Aura -> suggests Retribution Aura with AURA MISSING
+	AssertEq(tracker:GetMissingAura(), "Retribution Aura", "Should recommend Retribution Aura when no Aura is active")
+	ui:Refresh()
+	AssertEq(ui.frame:IsShown(), true, "HUD should reveal out of combat when Paladin Aura is missing")
+	AssertEq(ui.label:GetText(), "Retribution Aura", "HUD should show Retribution Aura")
+	AssertEq(ui.status:GetText(), "AURA MISSING", "HUD status should show AURA MISSING")
+
+	-- Any Aura active (e.g. Devotion Aura) -> reminder clears
+	c.SetPlayerAuras({
+		{ name = "Blessing of Kings", spellId = 20217, expirationTime = 4600 },
+		{ name = "Devotion Aura", spellId = 465, expirationTime = 0 },
+	})
+	c.Fire("UNIT_AURA", "player")
+	AssertEq(tracker:GetMissingAura(), nil, "Any active Paladin Aura should satisfy the reminder")
+	ui:Refresh()
+	ui:StepFade(1.0)
+	AssertEq(ui.frame:IsShown(), false, "HUD should hide once both Blessing and Aura are active")
 end)
 
 print(string.format("\nResults: %d passed, %d failed", passed, failed))

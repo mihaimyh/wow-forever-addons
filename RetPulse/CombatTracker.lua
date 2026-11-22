@@ -288,6 +288,7 @@ function CombatTracker:RefreshSeal()
 	-- nothing and must not wipe what the cast tracker already knows.
 	local sawReadable = false
 	local foundSeal = false
+	local foundAura = false
 	local foundBlessings = {}
 	for i = 1, 40 do
 		local ok, aura = pcall(C_UnitAuras.GetAuraDataByIndex, "player", i, "HELPFUL")
@@ -298,6 +299,8 @@ function CombatTracker:RefreshSeal()
 			sawReadable = true
 			if self:IsBlessingName(name) then
 				foundBlessings[name] = true
+			elseif self:IsAuraName(name) then
+				foundAura = true
 			elseif not foundSeal and self:IsSealName(name) then
 				foundSeal = true
 				self.activeSeal = name
@@ -314,9 +317,10 @@ function CombatTracker:RefreshSeal()
 		end
 	end
 
-	-- Out of combat we scanned the full player buff list: update blessings map.
+	-- Out of combat we scanned the full player buff list: update blessings & aura state.
 	if not InCombatLockdown() then
 		self.activeBlessings = foundBlessings
+		self.hasActiveAura = foundAura
 		if not foundSeal and sawReadable then
 			self.activeSeal = nil
 			self.activeSealID = nil
@@ -361,6 +365,10 @@ end
 
 function CombatTracker:IsBlessingName(name)
 	return type(name) == "string" and (name:find("^Blessing of ") ~= nil or name:find("^Greater Blessing of ") ~= nil)
+end
+
+function CombatTracker:IsAuraName(name)
+	return type(name) == "string" and name:find(" Aura$") ~= nil
 end
 
 local function IsSpellKnownByName(name)
@@ -409,6 +417,32 @@ function CombatTracker:GetMissingBlessing()
 	if not desired or not IsSpellKnownByName(desired) then return nil end
 	if active[desired] or active["Greater " .. desired] then return nil end
 	return desired
+end
+
+function CombatTracker:GetMissingAura()
+	if InCombatLockdown() then return nil end
+	if UnitIsDeadOrGhost and UnitIsDeadOrGhost("player") then return nil end
+	if ns.db and ns.db.remindAura == false then return nil end
+
+	if self.hasActiveAura then return nil end
+	if GetShapeshiftForm then
+		local okF, form = pcall(GetShapeshiftForm)
+		if okF and ns.IsReadable(form) and type(form) == "number" and form > 0 then
+			return nil
+		end
+	end
+
+	local order = {
+		ns.SPELLS.AURA_RETRIBUTION,
+		ns.SPELLS.AURA_SANCTITY,
+		ns.SPELLS.AURA_DEVOTION,
+	}
+	for _, auraName in ipairs(order) do
+		if IsSpellKnownByName(auraName) then
+			return auraName
+		end
+	end
+	return nil
 end
 
 function CombatTracker:IsSealAvailable(name)

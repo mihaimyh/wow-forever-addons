@@ -120,6 +120,12 @@ function Config:OnInitialize()
 			end)
 		end
 
+		self:AddCheckbox(category, "RetPulse_RemindAura", "remindAura",
+			"Remind missing Aura", "Remind out of combat if no Paladin Aura is active.", function()
+				local ui = ns:GetModule("UI")
+				if ui then ui:Refresh() end
+			end)
+
 		self:AddCheckbox(category, "RetPulse_TalentAdvisor", "talentAdvisor",
 			"Show talent recommendations", "Display RP NEXT / RP X/Y badges on the left side of talent buttons (does not overlap Zygor).", function()
 				local talents = ns:GetModule("Talents")
