@@ -383,6 +383,7 @@ local function CreateEnv(opts)
 		"WeaponEngine.lua",
 		"CombatTracker.lua",
 		"PriorityQueue.lua",
+		"Talents.lua",
 		"Diag.lua",
 		"Trace.lua",
 		"FX.lua",
@@ -1155,6 +1156,70 @@ Test("23. Missing seal during active GCD previews primary seal instead of flashi
 	local cur = pq:Evaluate()
 	AssertEq(cur, "Seal of Righteousness", "During GCD with no seal up, must preview primary seal instead of Holy Strike")
 	Assert(pq.countdown and pq.countdown <= 1.1, "Countdown should reflect remaining GCD (~1.0s), got: " .. tostring(pq.countdown))
+end)
+
+Test("24. TalentAdvisor computes exact next talent and 51-point targets for DPS and Leveling presets", function()
+	local c = CreateEnv({})
+	local talents = c.ns:GetModule("Talents")
+	Assert(talents ~= nil, "Talents module should exist")
+
+	-- Fresh character (0 points): DPS preset starts with Benediction, Leveling starts with Deflection
+	local planDps = talents:ComputePlan({}, "dps")
+	AssertEq(planDps.totalPoints, 51, "DPS build should have exactly 51 points")
+	AssertEq(planDps.nextTalent, "Benediction", "DPS build starts with Benediction")
+	AssertEq(planDps.targets["Unsealed Wrath"], 1, "DPS build includes Unsealed Wrath (1/1)")
+	AssertEq(planDps.targets["Seal of Command"], 1, "DPS build includes Seal of Command (1/1)")
+	AssertEq(planDps.targets["Improved Seals"], 5, "DPS build includes Improved Seals (5/5)")
+
+	-- After 5/5 Benediction and 1/2 Improved Judgement -> next must be Improved Judgement
+	local planMid = talents:ComputePlan({ ["Benediction"] = 5, ["Improved Judgement"] = 1 }, "dps")
+	AssertEq(planMid.nextTalent, "Improved Judgement", "Should recommend 2nd rank of Improved Judgement")
+	AssertEq(planMid.investedInBuild, 6, "Should count 6 invested points")
+
+	-- Leveling preset starts with Deflection
+	local planLvl = talents:ComputePlan({}, "leveling")
+	AssertEq(planLvl.totalPoints, 51, "Leveling build should have exactly 51 points")
+	AssertEq(planLvl.nextTalent, "Deflection", "Leveling build starts with Deflection")
+end)
+
+Test("25. TalentAdvisor attaches RP NEXT badge on PlayerSpellsFrame.TalentsFrame without overlapping Zygor", function()
+	local c = CreateEnv({})
+	local talents = c.ns:GetModule("Talents")
+
+	local btnBenediction = c.MakeFrame("Button")
+	btnBenediction.nodeInfo = { ranksPurchased = 0, maxRanks = 5, entryIDs = { 101 } }
+	btnBenediction.CanAfford = function() return true end
+
+	local btnJudgement = c.MakeFrame("Button")
+	btnJudgement.nodeInfo = { ranksPurchased = 0, maxRanks = 2, entryIDs = { 102 } }
+	btnJudgement.CanAfford = function() return false end
+
+	local talentsFrame = c.MakeFrame("Frame")
+	talentsFrame._shown = true
+	talentsFrame.IsVisible = function() return true end
+	talentsFrame.configurationInfo = { ID = 1 }
+	talentsFrame.nodeIDToButton = { [1] = btnBenediction, [2] = btnJudgement }
+	c.env.PlayerSpellsFrame = { TalentsFrame = talentsFrame }
+
+	c.env.C_Traits = {
+		GetEntryInfo = function(_, entryID) return { definitionID = entryID } end,
+		GetDefinitionInfo = function(defID) return { spellID = defID == 101 and 9001 or 9002 } end,
+	}
+	local origGetSpellInfo = c.env.C_Spell.GetSpellInfo
+	c.env.C_Spell.GetSpellInfo = function(id)
+		if id == 9001 then return { name = "Benediction" } end
+		if id == 9002 then return { name = "Improved Judgement" } end
+		return origGetSpellInfo(id)
+	end
+
+	talents:RefreshOverlay()
+	local overlayNext = talents.activeOverlays["Benediction"]
+	local overlayPlanned = talents.activeOverlays["Improved Judgement"]
+
+	Assert(overlayNext ~= nil, "Should attach RP overlay to next recommended talent")
+	AssertEq(overlayNext.badgeText:GetText(), "RP NEXT", "Next talent badge must be clearly branded 'RP NEXT'")
+	Assert(overlayPlanned ~= nil, "Should attach RP overlay to future planned talent")
+	AssertEq(overlayPlanned.badgeText:GetText(), "RP 0/2", "Planned talent badge must show 'RP 0/2'")
 end)
 
 print(string.format("\nResults: %d passed, %d failed", passed, failed))

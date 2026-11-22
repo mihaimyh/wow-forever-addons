@@ -101,6 +101,28 @@ function Config:OnInitialize()
 		self:AddCheckbox(category, "RetPulse_CrusaderBoss", "crusaderOnBoss",
 			"Crusader opener on Boss/Elite", "Recommend Seal of the Crusader + Judgement once per Boss/Elite target.")
 
+		self:AddCheckbox(category, "RetPulse_TalentAdvisor", "talentAdvisor",
+			"Show talent recommendations", "Display RP NEXT / RP X/Y badges on the left side of talent buttons (does not overlap Zygor).", function()
+				local talents = ns:GetModule("Talents")
+				if talents then talents:RefreshOverlay() end
+			end)
+
+		if Settings.CreateDropdown and Settings.CreateControlTextContainer then
+			local buildSetting = Settings.RegisterAddOnSetting(category, "RetPulse_TalentBuild", "talentBuild", ns.db,
+				Settings.VarType.String, "Talent build preset", "dps")
+			self.settings["talentBuild"] = buildSetting
+			Settings.CreateDropdown(category, buildSetting, function()
+				local container = Settings.CreateControlTextContainer()
+				container:Add("dps", "Unsealed Wrath (DPS / Benediction)", "5/5 Benediction into 31 Retribution / 20 Holy.")
+				container:Add("leveling", "Retribution (Leveling / Deflection)", "5/5 Deflection into 31 Retribution / 20 Holy.")
+				return container:GetData()
+			end, "Choose which RetPulse talent build to highlight in the Talent window.")
+			buildSetting:SetValueChangedCallback(function()
+				local talents = ns:GetModule("Talents")
+				if talents then talents:RefreshOverlay() end
+			end)
+		end
+
 		self:AddCheckbox(category, "RetPulse_Twist", "twistWithoutTalent",
 			"Twist without Unsealed Wrath", "Below level 40 the echoes do not exist; this follows the video literally.")
 
