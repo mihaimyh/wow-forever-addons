@@ -90,6 +90,7 @@ function Talents:OnLogin()
 	end)
 
 	local function ScheduleRefresh()
+		if InCombatLockdown and InCombatLockdown() then return end
 		if not (PlayerSpellsFrame and PlayerSpellsFrame.TalentsFrame and PlayerSpellsFrame.TalentsFrame:IsVisible()) then
 			return
 		end
@@ -174,7 +175,21 @@ local function ResolveButtonTalentName(configID, button)
 	return nil
 end
 
-function Talents:AcquireOverlay(parentButton)
+function Talents:EnsureOverlayRoot(talentsFrame)
+	if not self.overlayRoot then
+		local root = CreateFrame("Frame", nil, UIParent)
+		root:SetAllPoints(UIParent)
+		self.overlayRoot = root
+	end
+	if talentsFrame and talentsFrame.GetFrameStrata and self.overlayRoot.SetFrameStrata then
+		local okS, strata = pcall(talentsFrame.GetFrameStrata, talentsFrame)
+		if okS and strata then self.overlayRoot:SetFrameStrata(strata) end
+	end
+	self.overlayRoot:Show()
+	return self.overlayRoot
+end
+
+function Talents:AcquireOverlay(parentButton, root)
 	local overlay
 	for _, item in ipairs(self.overlayPool) do
 		if not item._inUse then
@@ -184,7 +199,7 @@ function Talents:AcquireOverlay(parentButton)
 	end
 
 	if not overlay then
-		overlay = CreateFrame("Frame", nil, parentButton, "BackdropTemplate")
+		overlay = CreateFrame("Frame", nil, root, "BackdropTemplate")
 		overlay:SetBackdrop({
 			bgFile = "Interface\\Buttons\\WHITE8X8",
 			edgeFile = "Interface\\Buttons\\WHITE8X8",
@@ -216,7 +231,6 @@ function Talents:AcquireOverlay(parentButton)
 	end
 
 	overlay._inUse = true
-	if overlay.SetParent then overlay:SetParent(parentButton) end
 	overlay:ClearAllPoints()
 	overlay:SetPoint("TOPLEFT", parentButton, "TOPLEFT", -2, 2)
 	overlay:SetPoint("BOTTOMRIGHT", parentButton, "BOTTOMRIGHT", 2, -2)
@@ -234,38 +248,42 @@ function Talents:ClearOverlays()
 	if self.headerFrame then
 		self.headerFrame:Hide()
 	end
+	if self.overlayRoot then
+		self.overlayRoot:Hide()
+	end
 end
 
-function Talents:EnsureHeader(talentsFrame)
-	if self.headerFrame then
-		if self.headerFrame.SetParent then self.headerFrame:SetParent(talentsFrame) end
-		return self.headerFrame
+function Talents:EnsureHeader(talentsFrame, root)
+	if not self.headerFrame then
+		local hdr = CreateFrame("Frame", nil, root, "BackdropTemplate")
+		hdr:SetSize(268, 22)
+		hdr:SetBackdrop({
+			bgFile = "Interface\\Buttons\\WHITE8X8",
+			edgeFile = "Interface\\Buttons\\WHITE8X8",
+			tile = false,
+			edgeSize = 1,
+		})
+		hdr:SetBackdropColor(DARK[1], DARK[2], DARK[3], 0.90)
+		hdr:SetBackdropBorderColor(GOLD[1], GOLD[2], GOLD[3], 0.70)
+
+		local text = hdr:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+		text:SetPoint("CENTER", hdr, "CENTER", 0, 0)
+		text:SetTextColor(GOLD[1], GOLD[2], GOLD[3])
+		hdr.text = text
+
+		self.headerFrame = hdr
 	end
 
-	local hdr = CreateFrame("Frame", nil, talentsFrame, "BackdropTemplate")
-	hdr:SetSize(268, 22)
-	hdr:SetPoint("TOP", talentsFrame, "TOP", 0, -54)
-	hdr:SetFrameLevel((talentsFrame:GetFrameLevel() or 10) + 25)
-	hdr:SetBackdrop({
-		bgFile = "Interface\\Buttons\\WHITE8X8",
-		edgeFile = "Interface\\Buttons\\WHITE8X8",
-		tile = false,
-		edgeSize = 1,
-	})
-	hdr:SetBackdropColor(DARK[1], DARK[2], DARK[3], 0.90)
-	hdr:SetBackdropBorderColor(GOLD[1], GOLD[2], GOLD[3], 0.70)
-
-	local text = hdr:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-	text:SetPoint("CENTER", hdr, "CENTER", 0, 0)
-	text:SetTextColor(GOLD[1], GOLD[2], GOLD[3])
-	hdr.text = text
-
-	self.headerFrame = hdr
-	return hdr
+	self.headerFrame:ClearAllPoints()
+	self.headerFrame:SetPoint("TOP", talentsFrame, "TOP", 0, -54)
+	self.headerFrame:SetFrameLevel((talentsFrame:GetFrameLevel() or 10) + 25)
+	return self.headerFrame
 end
 
 function Talents:RefreshOverlay()
 	self:ClearOverlays()
+
+	if InCombatLockdown and InCombatLockdown() then return end
 
 	local db = ns.db
 	if db and db.talentAdvisor == false then return end
@@ -275,6 +293,7 @@ function Talents:RefreshOverlay()
 	if type(tf.IsVisible) == "function" and not tf:IsVisible() then return end
 	if type(tf.nodeIDToButton) ~= "table" then return end
 
+	local root = self:EnsureOverlayRoot(tf)
 	local configID = tf.configurationInfo and tf.configurationInfo.ID or (C_ClassTalents and C_ClassTalents.GetActiveConfigID and C_ClassTalents.GetActiveConfigID()) or 1
 
 	local buttonsByName = {}
@@ -293,7 +312,7 @@ function Talents:RefreshOverlay()
 	local buildId = (db and db.talentBuild) or "dps"
 	local plan = self:ComputePlan(currentRanks, buildId)
 
-	local hdr = self:EnsureHeader(tf)
+	local hdr = self:EnsureHeader(tf, root)
 	hdr.text:SetText(string.format("RetPulse: %s  (%d/%d)", plan.label, plan.investedInBuild, plan.totalPoints))
 	hdr:Show()
 
@@ -301,7 +320,7 @@ function Talents:RefreshOverlay()
 		local btn = buttonsByName[name]
 		local cur = currentRanks[name] or 0
 		if btn then
-			local overlay = self:AcquireOverlay(btn)
+			local overlay = self:AcquireOverlay(btn, root)
 			overlay.pill:ClearAllPoints()
 
 			if cur >= targetRank then
