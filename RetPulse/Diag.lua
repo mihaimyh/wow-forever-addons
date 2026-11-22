@@ -12,11 +12,7 @@ local Diag = ns:NewModule("Diag")
 
 local MAX_LINES = 900
 
-local function Safe(value, fallback)
-	if value == nil then return fallback end
-	if ns.IsSecret(value) then return "secret" end
-	return tostring(value)
-end
+local Safe = ns.Safe
 
 function Diag:OnInitialize()
 	self.session = {}
@@ -63,13 +59,7 @@ function Diag:OnLogin()
 	ns:On("UNIT_SPELLCAST_SUCCEEDED", function(_, unit, _, spellID)
 		if not self.t0 or unit ~= "player" then return end
 
-		local spellName = "?"
-		if C_Spell and C_Spell.GetSpellInfo then
-			local ok, info = pcall(C_Spell.GetSpellInfo, spellID)
-			if ok and type(info) == "table" and type(info.name) == "string" and not ns.IsSecret(info.name) then
-				spellName = info.name
-			end
-		end
+		local spellName = ns.GetSpellNameByID(spellID) or "?"
 
 		local pq = ns:GetModule("PriorityQueue")
 		self:Add("CAST",

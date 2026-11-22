@@ -756,9 +756,8 @@ function UI:RefreshInner()
 	self.targetEchoes = echoes
 	local sealLeft = tracker:GetSealRemaining()
 
-	local primaryName, primaryStacks, secondaryName = queue:GetSealPair()
 	local activeSeal = tracker:GetActiveSeal()
-	local ready = trackerOn and secondaryName ~= nil and echoes >= primaryStacks and activeSeal == primaryName
+	local ready = queue:IsTwistReady(trackerOn)
 	local warnSeal = activeSeal ~= nil and sealLeft ~= nil and sealLeft <= 3
 
 	-- Main spell title & clean secondary status line
@@ -970,7 +969,7 @@ function UI:SavePosition()
 end
 
 function UI:ApplyPosition()
-	local pos = ns.db and ns.db.position or { point = "BOTTOM", relativePoint = "BOTTOM", x = 0, y = 220 }
+	local pos = ns.db and ns.db.position or ns.DefaultPosition()
 	self.frame:ClearAllPoints()
 	self.frame:SetPoint(pos.point or "BOTTOM", UIParent, pos.relativePoint or pos.point or "BOTTOM", pos.x or 0, pos.y or 220)
 end

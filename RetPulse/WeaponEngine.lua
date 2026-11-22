@@ -73,14 +73,8 @@ function WeaponEngine:RefreshTalents()
 	end
 	self.hasUnsealedWrath = known
 
-	self.hasSealOfCommand = (tracker and tracker:IsSealAvailable(ns.SPELLS.SEAL_COMMAND)) or false
-	if not self.hasSealOfCommand and C_Spell and C_Spell.GetSpellIDForSpellIdentifier and C_SpellBook and C_SpellBook.IsSpellKnown then
-		local okId, id = pcall(C_Spell.GetSpellIDForSpellIdentifier, ns.SPELLS.SEAL_COMMAND)
-		if okId and type(id) == "number" and not ns.IsSecret(id) then
-			local okK, isKnown = pcall(C_SpellBook.IsSpellKnown, id)
-			self.hasSealOfCommand = okK and not ns.IsSecret(isKnown) and isKnown and true or false
-		end
-	end
+	self.hasSealOfCommand = (tracker and tracker:IsSealAvailable(ns.SPELLS.SEAL_COMMAND))
+		or ns.IsSpellKnownByName(ns.SPELLS.SEAL_COMMAND)
 end
 
 function WeaponEngine:GetBracket()

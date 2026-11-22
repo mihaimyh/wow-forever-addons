@@ -17,13 +17,7 @@ local MAX_LINES = 4000
 local SAMPLE_COMBAT = 0.5
 local SAMPLE_IDLE = 2.0
 
-local function Safe(value, fallback)
-	if value == nil then return fallback end
-	if ns.IsSecret(value) then return "secret" end
-	local kind = type(value)
-	if kind == "table" then return "table" end
-	return tostring(value)
-end
+local Safe = ns.Safe
 
 function Trace:OnInitialize()
 	self.buffer = {}
@@ -61,11 +55,7 @@ function Trace:OnLogin()
 
 	ns:On("UNIT_SPELLCAST_SUCCEEDED", function(_, unit, _, spellID)
 		if unit ~= "player" then return end
-		local name = "?"
-		if C_Spell and C_Spell.GetSpellInfo and type(spellID) == "number" and not ns.IsSecret(spellID) then
-			local ok, info = pcall(C_Spell.GetSpellInfo, spellID)
-			if ok and type(info) == "table" and type(info.name) == "string" and not ns.IsSecret(info.name) then name = info.name end
-		end
+		local name = ns.GetSpellNameByID(spellID) or "?"
 		self:Record("EVENT", "CAST", "spell=" .. name, "id=" .. Safe(spellID, "?"))
 	end)
 

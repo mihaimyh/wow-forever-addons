@@ -22,21 +22,7 @@ local PriorityQueue = ns:NewModule("PriorityQueue")
 --   * Exorcism is never gated on Undead/Demon (UnitCreatureType is empty)
 -- A seal counts as available once it has been seen active on the player.
 
-local function IsKnown(name)
-	if not name then return false end
-	if C_Spell and C_Spell.GetSpellIDForSpellIdentifier and C_SpellBook and C_SpellBook.IsSpellKnown then
-		local okId, id = pcall(C_Spell.GetSpellIDForSpellIdentifier, name)
-		if not okId or type(id) ~= "number" or ns.IsSecret(id) then
-			return false
-		end
-		local okKnown, known = pcall(C_SpellBook.IsSpellKnown, id)
-		if okKnown and not ns.IsSecret(known) then
-			return known and true or false
-		end
-		return false
-	end
-	return true
-end
+local IsKnown = ns.IsSpellKnownByName
 
 local function IsUsable(name)
 	if not name or not C_Spell or not C_Spell.IsSpellUsable then return false end
@@ -127,11 +113,9 @@ function PriorityQueue:OnLogin()
 end
 
 function PriorityQueue:NoteCast(spellID)
-	if type(spellID) ~= "number" or ns.IsSecret(spellID) or not C_Spell or not C_Spell.GetSpellInfo then return end
-	local ok, info = pcall(C_Spell.GetSpellInfo, spellID)
-	if not ok or type(info) ~= "table" or type(info.name) ~= "string" or ns.IsSecret(info.name) then return end
+	local name = ns.GetSpellNameByID(spellID)
+	if not name then return end
 
-	local name = info.name
 	local now = GetTime()
 
 	-- Only on-GCD rotation spells and seals spend the global; trinkets, racials
@@ -303,13 +287,25 @@ function PriorityQueue:GetSealPair()
 	return primaryName, primaryStacks, secondaryName, secondaryStacks
 end
 
+-- True when the echoes are at the cap of the active primary seal and a
+-- secondary seal exists to detonate them (timing windows are checked by the
+-- caller). Shared by the queue and the HUD so the rule lives in one place.
+function PriorityQueue:IsTwistReady(hasUnsealedWrath)
+	if not hasUnsealedWrath then return false end
+	local tracker = ns:GetModule("CombatTracker")
+	local primaryName, primaryStacks, secondaryName = self:GetSealPair()
+	return secondaryName ~= nil
+		and tracker:GetActiveSeal() == primaryName
+		and tracker:GetEchoes() >= primaryStacks
+end
+
 function PriorityQueue:Evaluate()
 	local tracker = ns:GetModule("CombatTracker")
 	local engine = ns:GetModule("WeaponEngine")
 	local db = ns.db or {}
 	local hasUnsealedWrath = (engine and engine.hasUnsealedWrath == true) or (db.twistWithoutTalent == true)
 
-	local primalName, primaryStacks, secondaryName = self:GetSealPair()
+	local primaryName, primaryStacks, secondaryName = self:GetSealPair()
 	local activeSeal = tracker:GetActiveSeal()
 	local echoes = tracker:GetEchoes()
 	local swingsWithSeal = tracker:GetSwingsWithSeal()
@@ -358,19 +354,19 @@ function PriorityQueue:Evaluate()
 		elseif activeSeal == ns.SPELLS.SEAL_CRUSADER and IsUsable(ns.SPELLS.JUDGEMENT) and self:IsReady(ns.SPELLS.JUDGEMENT) then
 			Add(ns.SPELLS.JUDGEMENT, true)
 		end
-	elseif activeSeal == ns.SPELLS.SEAL_CRUSADER and primalName and gcdReady then
+	elseif activeSeal == ns.SPELLS.SEAL_CRUSADER and primaryName and gcdReady then
 		-- Crusader already judged: immediately switch back to primary DPS seal.
-		Add(primalName, false)
+		Add(primaryName, false)
 	end
 
 	-- 0. No seal up: nothing else matters, every swing is losing seal damage.
-	if primalName and activeSeal == nil and gcdReady then
-		Add(primalName, false)
+	if primaryName and activeSeal == nil and gcdReady then
+		Add(primaryName, false)
 	end
 
 	-- 1. Twist: echoes are at the cap for the active seal, so change seals.
 	--    A seal swap is a global: it must fit before the next swing.
-	if hasUnsealedWrath and secondaryName and activeSeal == primalName and echoes >= primaryStacks and swingOpen and gcdReady then
+	if hasUnsealedWrath and secondaryName and activeSeal == primaryName and echoes >= primaryStacks and swingOpen and gcdReady then
 		Add(secondaryName, false)
 	end
 
@@ -433,9 +429,9 @@ function PriorityQueue:Evaluate()
 	end
 
 	-- 8. Seal upkeep (return to primary after the detonating swing landed).
-	if hasUnsealedWrath and primalName and secondaryName and activeSeal == secondaryName and gcdReady then
+	if hasUnsealedWrath and primaryName and secondaryName and activeSeal == secondaryName and gcdReady then
 		if swingsWithSeal >= 1 and echoes < primaryStacks then
-			Add(primalName, false)
+			Add(primaryName, false)
 		end
 	end
 
@@ -460,14 +456,14 @@ function PriorityQueue:Evaluate()
 		}
 	end
 
-	if primalName and activeSeal == nil then
-		ConsiderUpcoming(primalName, false)
+	if primaryName and activeSeal == nil then
+		ConsiderUpcoming(primaryName, false)
 	end
 
 	if hasTarget then
 		local sealAfterCurrent = activeSeal
-		if current and current.name == primalName and activeSeal == nil then
-			sealAfterCurrent = primalName
+		if current and current.name == primaryName and activeSeal == nil then
+			sealAfterCurrent = primaryName
 		end
 		if sealAfterCurrent ~= nil and sealAfterCurrent ~= ns.SPELLS.SEAL_FURY then
 			ConsiderUpcoming(ns.SPELLS.JUDGEMENT, true)

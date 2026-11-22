@@ -181,7 +181,7 @@ function Config:OnInitialize()
 					"HUD Position",
 					"Reset Position",
 					function()
-						ns.db.position = { point = "BOTTOM", relativePoint = "BOTTOM", x = 0, y = 220 }
+						ns.db.position = ns.DefaultPosition()
 						ns.ApplyPosition()
 						ns:Print("position reset")
 					end,

@@ -171,6 +171,42 @@ function ns.IsReadable(value)
 	return t == "number" or t == "string" or t == "boolean"
 end
 
+-- Shared, secret-safe spell helpers (one implementation for every module).
+function ns.GetSpellNameByID(spellID)
+	if type(spellID) ~= "number" or ns.IsSecret(spellID) then return nil end
+	if not C_Spell or not C_Spell.GetSpellInfo then return nil end
+	local ok, info = pcall(C_Spell.GetSpellInfo, spellID)
+	if not ok or type(info) ~= "table" then return nil end
+	local name = info.name
+	if type(name) ~= "string" or ns.IsSecret(name) then return nil end
+	return name
+end
+
+-- Resolves by name so every spell rank counts as known.
+function ns.IsSpellKnownByName(name)
+	if not name then return false end
+	if not (C_Spell and C_Spell.GetSpellIDForSpellIdentifier and C_SpellBook and C_SpellBook.IsSpellKnown) then
+		return false
+	end
+	local okId, id = pcall(C_Spell.GetSpellIDForSpellIdentifier, name)
+	if not okId or type(id) ~= "number" or ns.IsSecret(id) then return false end
+	local okK, known = pcall(C_SpellBook.IsSpellKnown, id)
+	if not okK or ns.IsSecret(known) then return false end
+	return known and true or false
+end
+
+-- Debug-friendly tostring that never throws on secret values.
+function ns.Safe(value, fallback)
+	if value == nil then return fallback end
+	if ns.IsSecret(value) then return "secret" end
+	if type(value) == "table" then return "table" end
+	return tostring(value)
+end
+
+function ns.DefaultPosition()
+	return { point = "BOTTOM", relativePoint = "BOTTOM", x = 0, y = 220 }
+end
+
 -- Work that touches secure frames must wait for combat to end.
 local outOfCombatQueue = {}
 
@@ -251,7 +287,7 @@ ns:On("ADDON_LOADED", function(_, loadedName)
 			schema = 2
 		end
 		if schema < 3 then
-			RetPulseDB.position = { point = "BOTTOM", relativePoint = "BOTTOM", x = 0, y = 220 }
+			RetPulseDB.position = ns.DefaultPosition()
 			schema = 3
 		end
 		if schema < 4 then
@@ -467,7 +503,7 @@ function ns:HandleSlash(msg)
 		ns:Print("scale set to", value)
 		return
 	elseif cmd == "reset" then
-		ns.db.position = { point = "BOTTOM", relativePoint = "BOTTOM", x = 0, y = 220 }
+		ns.db.position = ns.DefaultPosition()
 		if ns.ApplyPosition then ns.ApplyPosition() end
 		ns:Print("position reset")
 		return

@@ -14,61 +14,42 @@ local DARK  = { 0.04, 0.04, 0.06 }
 local DONE_TEXT = "RP |TInterface\\RaidFrame\\ReadyCheck-Ready:10:10|t"
 
 -- Ordered 51-point builds (Retribution 31 -> Unsealed Wrath + Holy 20).
+-- Both presets share everything after the first talent, which differs only in
+-- the opening choice (Benediction for DPS, Deflection for leveling).
+local BUILD_CORE = {
+	"Improved Judgement", "Improved Judgement",
+	"Conviction", "Conviction", "Conviction",
+	"Pursuit of Justice", "Pursuit of Justice",
+	"Seal of Command",
+	"Sanctified Judgement", "Sanctified Judgement",
+	"Sacred Arbiter",
+	"Two-Handed Weapon Specialization", "Two-Handed Weapon Specialization", "Two-Handed Weapon Specialization",
+	"Sanctified Judgement",
+	"Vengeance", "Vengeance", "Vengeance",
+	"Repentance",
+	"Vindication",
+	"Champion of the Light", "Champion of the Light", "Champion of the Light", "Champion of the Light", "Champion of the Light",
+	"Unsealed Wrath",
+	"Divine Strength", "Divine Strength", "Divine Strength", "Divine Strength", "Divine Strength",
+	"Reverence", "Reverence",
+	"Improved Seals", "Improved Seals", "Improved Seals",
+	"Holy Conduit", "Holy Conduit",
+	"Improved Seals", "Improved Seals",
+	"Purifying Power", "Purifying Power",
+	"Divine Precision", "Divine Precision",
+	"Vindication", "Vindication",
+}
+
+local function MakeBuild(label, opener)
+	local order = {}
+	for _ = 1, 5 do order[#order + 1] = opener end
+	for _, name in ipairs(BUILD_CORE) do order[#order + 1] = name end
+	return { label = label, order = order }
+end
+
 local BUILDS = {
-	dps = {
-		label = "Unsealed Wrath (DPS)",
-		order = {
-			"Benediction", "Benediction", "Benediction", "Benediction", "Benediction",
-			"Improved Judgement", "Improved Judgement",
-			"Conviction", "Conviction", "Conviction",
-			"Pursuit of Justice", "Pursuit of Justice",
-			"Seal of Command",
-			"Sanctified Judgement", "Sanctified Judgement",
-			"Sacred Arbiter",
-			"Two-Handed Weapon Specialization", "Two-Handed Weapon Specialization", "Two-Handed Weapon Specialization",
-			"Sanctified Judgement",
-			"Vengeance", "Vengeance", "Vengeance",
-			"Repentance",
-			"Vindication",
-			"Champion of the Light", "Champion of the Light", "Champion of the Light", "Champion of the Light", "Champion of the Light",
-			"Unsealed Wrath",
-			"Divine Strength", "Divine Strength", "Divine Strength", "Divine Strength", "Divine Strength",
-			"Reverence", "Reverence",
-			"Improved Seals", "Improved Seals", "Improved Seals",
-			"Holy Conduit", "Holy Conduit",
-			"Improved Seals", "Improved Seals",
-			"Purifying Power", "Purifying Power",
-			"Divine Precision", "Divine Precision",
-			"Vindication", "Vindication",
-		},
-	},
-	leveling = {
-		label = "Retribution (Leveling)",
-		order = {
-			"Deflection", "Deflection", "Deflection", "Deflection", "Deflection",
-			"Improved Judgement", "Improved Judgement",
-			"Conviction", "Conviction", "Conviction",
-			"Pursuit of Justice", "Pursuit of Justice",
-			"Seal of Command",
-			"Sanctified Judgement", "Sanctified Judgement",
-			"Sacred Arbiter",
-			"Two-Handed Weapon Specialization", "Two-Handed Weapon Specialization", "Two-Handed Weapon Specialization",
-			"Sanctified Judgement",
-			"Vengeance", "Vengeance", "Vengeance",
-			"Repentance",
-			"Vindication",
-			"Champion of the Light", "Champion of the Light", "Champion of the Light", "Champion of the Light", "Champion of the Light",
-			"Unsealed Wrath",
-			"Divine Strength", "Divine Strength", "Divine Strength", "Divine Strength", "Divine Strength",
-			"Reverence", "Reverence",
-			"Improved Seals", "Improved Seals", "Improved Seals",
-			"Holy Conduit", "Holy Conduit",
-			"Improved Seals", "Improved Seals",
-			"Purifying Power", "Purifying Power",
-			"Divine Precision", "Divine Precision",
-			"Vindication", "Vindication",
-		},
-	},
+	dps = MakeBuild("Unsealed Wrath (DPS)", "Benediction"),
+	leveling = MakeBuild("Retribution (Leveling)", "Deflection"),
 }
 
 Talents.BUILDS = BUILDS

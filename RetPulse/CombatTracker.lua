@@ -353,13 +353,9 @@ end
 -- Cast tracking is the in-combat fallback: cast events and spell IDs stay
 -- readable even when aura names are secret.
 function CombatTracker:OnSpellCast(spellID)
-	if type(spellID) ~= "number" or ns.IsSecret(spellID) then return end
-	if not C_Spell or not C_Spell.GetSpellInfo then return end
+	local name = ns.GetSpellNameByID(spellID)
+	if not name then return end
 
-	local ok, info = pcall(C_Spell.GetSpellInfo, spellID)
-	if not ok or type(info) ~= "table" or type(info.name) ~= "string" or ns.IsSecret(info.name) then return end
-
-	local name = info.name
 	if name == ns.SPELLS.JUDGEMENT and self:GetActiveSeal() == ns.SPELLS.SEAL_CRUSADER then
 		self.judgedCrusader = true
 	end
@@ -399,17 +395,7 @@ function CombatTracker:IsAuraName(name)
 	return type(name) == "string" and name:find(" Aura$") ~= nil
 end
 
-local function IsSpellKnownByName(name)
-	if not name then return false end
-	if C_Spell and C_Spell.GetSpellIDForSpellIdentifier and C_SpellBook and C_SpellBook.IsSpellKnown then
-		local okId, id = pcall(C_Spell.GetSpellIDForSpellIdentifier, name)
-		if okId and type(id) == "number" and not ns.IsSecret(id) then
-			local okK, known = pcall(C_SpellBook.IsSpellKnown, id)
-			return okK and known and true or false
-		end
-	end
-	return false
-end
+local IsSpellKnownByName = ns.IsSpellKnownByName
 
 function CombatTracker:GetMissingBlessing()
 	if InCombatLockdown() then return nil end
@@ -480,16 +466,7 @@ end
 function CombatTracker:IsSealAvailable(name)
 	if not name then return false end
 	if self.seenSeals[name] then return true end
-	if C_Spell and C_Spell.GetSpellIDForSpellIdentifier and C_SpellBook and C_SpellBook.IsSpellKnown then
-		local okId, id = pcall(C_Spell.GetSpellIDForSpellIdentifier, name)
-		if okId and type(id) == "number" and not ns.IsSecret(id) then
-			local okKnown, known = pcall(C_SpellBook.IsSpellKnown, id)
-			if okKnown and not ns.IsSecret(known) then
-				return known and true or false
-			end
-		end
-	end
-	return false
+	return ns.IsSpellKnownByName(name)
 end
 
 function CombatTracker:GetActiveSeal()
@@ -826,12 +803,10 @@ function CombatTracker:GetSealRemaining()
 end
 
 function CombatTracker:SetSpellGlow(spellID, glowing)
-	if not ns.IsReadable(spellID) or type(spellID) ~= "number" then return end
-	if not C_Spell or not C_Spell.GetSpellInfo then return end
-	local ok, info = pcall(C_Spell.GetSpellInfo, spellID)
-	if not ok or type(info) ~= "table" or type(info.name) ~= "string" or ns.IsSecret(info.name) then return end
+	local name = ns.GetSpellNameByID(spellID)
+	if not name then return end
 	self.glowingSpells = self.glowingSpells or {}
-	self.glowingSpells[info.name] = glowing and true or nil
+	self.glowingSpells[name] = glowing and true or nil
 end
 
 function CombatTracker:IsSpellGlowing(name)
