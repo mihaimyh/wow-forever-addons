@@ -11,7 +11,8 @@ Guidelines for agents building and maintaining addons in this repository (`RetPu
   ```powershell
   npx --yes --package=fengari-node-cli fengari tests/run_tests.lua
   ```
-- Local MCP server (`wow-forever-mcp`, source in `mcp-server/index.mjs`): use `client_status`, `read_saved_vars`, `read_lua_errors`, `search_wow_api`, `read_framexml`, and `validate_addon` when debugging SavedVariables, inspecting exported `16001` API docs, or validating addons.
+- Local MCP server (`wow-forever-mcp`, source in `mcp-server/index.mjs`): use `client_status`, `read_saved_vars`, `read_lua_errors`, `search_wow_api`, `read_framexml`, `validate_addon`, and `capture_wow_screenshot` when debugging SavedVariables, inspecting exported `16001` API docs, or validating addons.
+- **CurseForge CI/CD (`RetPulse`, Project ID `1822620`)**: `.pkgmeta` + `.github/workflows/release-retpulse.yml` run the offline Lua test suite and publish automatically via `BigWigsMods/packager@v2` using the `CF_API_KEY` GitHub secret. To release a new version, bump `## Version:` in `RetPulse/RetPulse.toc`, commit, and push a `v*` tag (`git tag vX.Y.Z && git push --tags`). Never commit API tokens.
 
 ## WoW: Forever Client Reality (Probed on `1.60.1 build 70938`, TOC `16001`)
 
