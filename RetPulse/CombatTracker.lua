@@ -288,7 +288,8 @@ function CombatTracker:RefreshSeal()
 	-- nothing and must not wipe what the cast tracker already knows.
 	local sawReadable = false
 	local foundSeal = false
-	local foundAura = false
+	local foundOwnAura = false
+	local foundAuras = {}
 	local foundBlessings = {}
 	local foundOwnBlessings = {}
 	for i = 1, 40 do
@@ -298,14 +299,14 @@ function CombatTracker:RefreshSeal()
 		local name = aura.name
 		if name ~= nil and not ns.IsSecret(name) then
 			sawReadable = true
+			local src = aura.sourceUnit
+			local fromPlayer = (src ~= nil and not ns.IsSecret(src) and src == "player")
 			if self:IsBlessingName(name) then
 				foundBlessings[name] = true
-				local src = aura.sourceUnit
-				if src ~= nil and not ns.IsSecret(src) and src == "player" then
-					foundOwnBlessings[name] = true
-				end
+				if fromPlayer then foundOwnBlessings[name] = true end
 			elseif self:IsAuraName(name) then
-				foundAura = true
+				foundAuras[name] = true
+				if fromPlayer then foundOwnAura = true end
 			elseif not foundSeal and self:IsSealName(name) then
 				foundSeal = true
 				self.activeSeal = name
@@ -326,7 +327,8 @@ function CombatTracker:RefreshSeal()
 	if not InCombatLockdown() then
 		self.activeBlessings = foundBlessings
 		self.ownBlessings = foundOwnBlessings
-		self.hasActiveAura = foundAura
+		self.activeAuras = foundAuras
+		self.hasOwnAura = foundOwnAura
 		if not foundSeal and sawReadable then
 			self.activeSeal = nil
 			self.activeSealID = nil
@@ -435,7 +437,7 @@ function CombatTracker:GetMissingAura()
 	if UnitIsDeadOrGhost and UnitIsDeadOrGhost("player") then return nil end
 	if ns.db and ns.db.remindAura == false then return nil end
 
-	if self.hasActiveAura then return nil end
+	if self.hasOwnAura then return nil end
 	if GetShapeshiftForm then
 		local okF, form = pcall(GetShapeshiftForm)
 		if okF and ns.IsReadable(form) and type(form) == "number" and form > 0 then
@@ -443,13 +445,14 @@ function CombatTracker:GetMissingAura()
 		end
 	end
 
+	local activeAuras = self.activeAuras or {}
 	local order = {
 		ns.SPELLS.AURA_RETRIBUTION,
 		ns.SPELLS.AURA_SANCTITY,
 		ns.SPELLS.AURA_DEVOTION,
 	}
 	for _, auraName in ipairs(order) do
-		if IsSpellKnownByName(auraName) then
+		if IsSpellKnownByName(auraName) and not activeAuras[auraName] then
 			return auraName
 		end
 	end

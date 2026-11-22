@@ -1382,6 +1382,47 @@ Test("29. Another Paladin's Blessing of Wisdom does not suppress your own Blessi
 	AssertEq(tracker:GetMissingBlessing(), nil, "Reminder clears once player has their own Blessing active")
 end)
 
+Test("30. Another Paladin's Devotion Aura does not suppress your own Aura reminder", function()
+	local c = CreateEnv({
+		inCombat = false,
+		targetExists = false,
+		knownSpells = {
+			["Retribution Aura"] = 7294,
+			["Devotion Aura"] = 465,
+			["Blessing of Kings"] = 20217,
+		},
+		usableSpells = {
+			["Retribution Aura"] = true,
+			["Devotion Aura"] = true,
+			["Blessing of Kings"] = true,
+		},
+		playerAuras = {
+			{ name = "Blessing of Kings", spellId = 20217, sourceUnit = "player", expirationTime = 4600 },
+			-- Devotion Aura from another Paladin, player has NO Aura of their own!
+			{ name = "Devotion Aura", spellId = 465, sourceUnit = "party1", expirationTime = 0 },
+		},
+	})
+	local tracker = c.ns:GetModule("CombatTracker")
+	AssertEq(tracker:GetMissingAura(), "Retribution Aura", "Another Paladin's Devotion Aura must not suppress your own Retribution Aura")
+
+	-- If another Paladin already runs Retribution Aura, suggest Devotion Aura instead of duplicating
+	c.SetPlayerAuras({
+		{ name = "Blessing of Kings", spellId = 20217, sourceUnit = "player", expirationTime = 4600 },
+		{ name = "Retribution Aura", spellId = 7294, sourceUnit = "party1", expirationTime = 0 },
+	})
+	c.Fire("UNIT_AURA", "player")
+	AssertEq(tracker:GetMissingAura(), "Devotion Aura", "Should skip Retribution Aura from another Paladin and suggest Devotion Aura")
+
+	-- Once player activates their own Aura -> reminder clears
+	c.SetPlayerAuras({
+		{ name = "Blessing of Kings", spellId = 20217, sourceUnit = "player", expirationTime = 4600 },
+		{ name = "Retribution Aura", spellId = 7294, sourceUnit = "party1", expirationTime = 0 },
+		{ name = "Devotion Aura", spellId = 465, sourceUnit = "player", expirationTime = 0 },
+	})
+	c.Fire("UNIT_AURA", "player")
+	AssertEq(tracker:GetMissingAura(), nil, "Reminder clears once player has their own Aura active")
+end)
+
 print(string.format("\nResults: %d passed, %d failed", passed, failed))
 if failed > 0 then
 	os.exit(1)
