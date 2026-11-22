@@ -600,13 +600,18 @@ function UI:ShouldBeVisible(db, inCombat, hasHostile, placing)
 	return db.showOutOfCombat or inCombat or hasHostile
 end
 
+-- Click-to-cast: a secure button anchored over the main icon, parented to
+-- UIParent (NEVER to main/frame, otherwise main:SetScale() in StepAnimations
+-- and frame:Show/Hide become protected in combat and trigger taint blocks).
 function UI:BuildClickCast(frame, main, cooldown)
-	local ok, btn = pcall(CreateFrame, "Button", nil, main, "SecureActionButtonTemplate")
+	local ok, btn = pcall(CreateFrame, "Button", nil, UIParent, "SecureActionButtonTemplate")
 	if not ok or not btn then return end
 	btn:SetAllPoints(main)
+	if frame.GetFrameStrata then btn:SetFrameStrata(frame:GetFrameStrata()) end
 	btn:SetFrameLevel(cooldown:GetFrameLevel() + 4)
 	btn:RegisterForClicks("LeftButtonDown", "LeftButtonUp")
 	btn:RegisterForDrag("LeftButton")
+	btn:EnableMouse(false)
 	btn:HookScript("OnDragStart", function()
 		if ns.db and not ns.db.locked then frame:StartMoving() end
 	end)
@@ -644,6 +649,10 @@ function UI:UpdateClickCast(spell, targetUnit, targetName)
 		wantUnit = targetUnit
 	end
 	self.clickUnitName = want and targetName or nil
+	local active = (want ~= nil) and (self.frame and self.frame.IsShown and self.frame:IsShown() ~= false)
+	if btn.EnableMouse then
+		btn:EnableMouse(active and true or false)
+	end
 	if want == self.clickSpell and wantUnit == self.clickUnit then return end
 	self.clickSpell = want
 	self.clickUnit = wantUnit

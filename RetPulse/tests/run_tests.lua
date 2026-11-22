@@ -1846,6 +1846,22 @@ Test("42. Group buff advisor detects missing party/raid blessings by class and a
 	AssertEq(attrs.unit, nil, "Click-to-cast unit attribute must clear when no group buff is pending")
 end)
 
+Test("43. Click-to-cast button is not parented under main/frame so StepAnimations SetScale never taints in combat", function()
+	local c = CreateEnv({ inCombat = false, targetExists = false })
+	local ui = c.ns:GetModule("UI")
+	Assert(ui.clickBtn ~= nil, "clickBtn must exist")
+	Assert(ui.clickBtn:GetParent() == c.env.UIParent, "clickBtn must parent to UIParent so main:SetScale and frame:Show/Hide never become protected in combat")
+
+	local mouseEnabled = true
+	ui.clickBtn.EnableMouse = function(_, v) mouseEnabled = v end
+	ui:UpdateClickCast(nil)
+	AssertEq(mouseEnabled, false, "clickBtn must be click-through when no spell is armed")
+
+	ui.frame:Show()
+	ui:UpdateClickCast("Blessing of Kings")
+	AssertEq(mouseEnabled, true, "clickBtn must accept clicks when HUD is shown and spell is armed out of combat")
+end)
+
 print(string.format("\nResults: %d passed, %d failed", passed, failed))
 if failed > 0 then
 	os.exit(1)
