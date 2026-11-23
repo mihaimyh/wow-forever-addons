@@ -99,13 +99,32 @@ function Config:OnInitialize()
 			"Always include Consecration", "Force Consecration and Holy Wrath into single-target rotation too.")
 
 		self:AddCheckbox(category, "RetPulse_AutoAoE", "autoAoe",
-			"Auto-AoE from nameplates", "Automatically switch to AoE when 2+ hostile enemies are in melee range.")
+			"Auto-AoE from nameplates", "Automatically switch to AoE when enough hostile enemies are in melee range.")
+
+		if Settings.CreateDropdown and Settings.CreateControlTextContainer then
+			local aoeThresholdSetting = Settings.RegisterAddOnSetting(category, "RetPulse_AutoAoeThreshold", "autoAoeThreshold", ns.db,
+				Settings.VarType.Number, "Auto-AoE enemy threshold", 2)
+			self.settings["autoAoeThreshold"] = aoeThresholdSetting
+			Settings.CreateDropdown(category, aoeThresholdSetting, function()
+				local container = Settings.CreateControlTextContainer()
+				container:Add(2, "2+ enemies", "Use Consecration when 2 or more enemies are in melee range.")
+				container:Add(3, "3+ enemies (Mana friendly)", "Save mana in dungeons by waiting for 3+ melee enemies.")
+				container:Add(4, "4+ enemies (Big pulls)", "Only use Auto-AoE on large packs of 4+ enemies.")
+				return container:GetData()
+			end, "Minimum melee enemies needed before Auto-AoE switches to Consecration.")
+		end
+
+		self:AddCheckbox(category, "RetPulse_ManaSaver", "manaSaver",
+			"Low-mana guard (combat)", "Skip expensive openers when Consecration hits insufficient mana, keeping Judgement and Holy Strike flowing.")
 
 		self:AddCheckbox(category, "RetPulse_Interrupt", "suggestInterrupt",
 			"Interrupt alerts (Hammer of Justice)", "Prioritize Hammer of Justice when your target casts an interruptible spell.")
 
 		self:AddCheckbox(category, "RetPulse_CrusaderBoss", "crusaderOnBoss",
-			"Crusader opener on Boss/Elite", "Recommend Seal of the Crusader + Judgement once per Boss/Elite target.")
+			"Crusader opener on Boss/Elite", "Recommend Seal of the Crusader + Judgement once per Boss/Elite pull.")
+
+		self:AddCheckbox(category, "RetPulse_CrusaderBossOnly", "crusaderBossOnly",
+			"Crusader opener: Boss only", "Skip dungeon trash elites and only use Seal of the Crusader opener on worldbosses.")
 
 		if Settings.CreateDropdown and Settings.CreateControlTextContainer then
 			local blessSetting = Settings.RegisterAddOnSetting(category, "RetPulse_PreferredBlessing", "preferredBlessing", ns.db,

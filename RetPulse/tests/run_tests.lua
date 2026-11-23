@@ -1869,6 +1869,54 @@ Test("43. Click-to-cast button is not parented under main/frame so StepAnimation
 	AssertEq(scaled, false, "StepAnimations must not call main:SetScale() (uses SetTexCoord zoom)")
 end)
 
+Test("44. Mana-saving options: Auto-AoE threshold, Boss-only Crusader opener, and low-mana fallback", function()
+	local c = CreateEnv({
+		targetClassification = "elite",
+		knownSpells = {
+			["Judgement"] = 20271,
+			["Holy Strike"] = 678,
+			["Consecration"] = 26573,
+			["Seal of Righteousness"] = 20288,
+			["Seal of the Crusader"] = 21082,
+		},
+		usableSpells = {
+			["Judgement"] = true,
+			["Holy Strike"] = true,
+			["Consecration"] = true,
+			["Seal of Righteousness"] = true,
+			["Seal of the Crusader"] = true,
+		},
+		nameplates = {
+			{ unit = "nameplate1", hostile = true, inCombat = true, inRange = true },
+			{ unit = "nameplate2", hostile = true, inCombat = true, inRange = true },
+			{ unit = "nameplate3", hostile = true, inCombat = true, inRange = true },
+		},
+	})
+	c.SetCombat(true)
+	local pq = c.ns:GetModule("PriorityQueue")
+
+	-- 1. Boss-only Crusader opener skips dungeon trash elites
+	c.ns.db.crusaderBossOnly = true
+	c.Fire("UNIT_SPELLCAST_SUCCEEDED", "player", "s1", 20288)
+	c.Advance(1.6)
+	pq.cdUntil["Judgement"] = c.env.GetTime() + 5.0
+	c.ns.db.autoAoeThreshold = 3
+	AssertEq(pq:Evaluate(), "Consecration", "3+ enemies meets threshold=3 and skips elite Crusader opener")
+
+	-- 2. Raising threshold to 4 keeps Holy Strike on 3-mob pack
+	c.ns.db.autoAoeThreshold = 4
+	AssertEq(pq:Evaluate(), "Holy Strike", "3 enemies below threshold=4 must stay on Holy Strike to save mana")
+
+	-- 3. Low-mana guard (insufficientPower on Consecration) skips expensive Crusader opener even on worldboss
+	c.SetTargetClassification("worldboss")
+	c.ns.db.crusaderBossOnly = false
+	c.env.C_Spell.IsSpellUsable = function(name)
+		if name == "Consecration" then return false, true end
+		return (name == "Holy Strike" or name == "Judgement" or name == "Seal of Righteousness" or name == "Seal of the Crusader"), false
+	end
+	AssertEq(pq:Evaluate(), "Holy Strike", "When Consecration hits insufficientPower, skip Crusader opener and stay on core DPS")
+end)
+
 print(string.format("\nResults: %d passed, %d failed", passed, failed))
 if failed > 0 then
 	os.exit(1)

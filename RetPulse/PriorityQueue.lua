@@ -340,11 +340,16 @@ function PriorityQueue:Evaluate()
 		Add(ns.SPELLS.HAMMER_OF_JUSTICE, true, { isInterrupt = true })
 	end
 
-	-- 0a. Boss / Elite opener: apply Judgement of the Crusader once per target.
+	-- Detect low mana in combat via insufficientPower on Consecration (our
+	-- costliest spell), since UnitPower() is secret in combat.
+	local lowMana = (db.manaSaver ~= false) and IsKnown(ns.SPELLS.CONSECRATION) and IsNoMana(ns.SPELLS.CONSECRATION)
+
+	-- 0a. Boss / Elite opener: apply Judgement of the Crusader once per pull.
 	local cls = hasTarget and UnitClassification and UnitClassification("target") or nil
 	if cls ~= nil and ns.IsSecret(cls) then cls = nil end
-	local isBossOrElite = (cls == "worldboss" or cls == "elite" or cls == "rareelite")
+	local isBossOrElite = (cls == "worldboss") or (not db.crusaderBossOnly and (cls == "elite" or cls == "rareelite"))
 	local needCrusader = hasTarget and (db.crusaderOnBoss ~= false) and isBossOrElite
+		and (not lowMana or activeSeal == ns.SPELLS.SEAL_CRUSADER)
 		and tracker and tracker.HasJudgedCrusader and not tracker:HasJudgedCrusader()
 		and IsKnown(ns.SPELLS.SEAL_CRUSADER) and IsUsable(ns.SPELLS.SEAL_CRUSADER)
 
@@ -402,9 +407,10 @@ function PriorityQueue:Evaluate()
 		Add(ns.SPELLS.HAMMER_OF_WRATH, true)
 	end
 
-	-- 4. AoE priority when manual AoE is on OR Auto-AoE detects 2+ hostile mobs
-	--    in melee range via nameplates.
-	local autoAoeActive = (db.autoAoe ~= false) and tracker and tracker.GetMeleeEnemyCount and (tracker:GetMeleeEnemyCount() >= 2)
+	-- 4. AoE priority when manual AoE is on OR Auto-AoE detects enough hostile
+	--    mobs in melee range via nameplates.
+	local aoeThreshold = tonumber(db.autoAoeThreshold) or 2
+	local autoAoeActive = (db.autoAoe ~= false) and tracker and tracker.GetMeleeEnemyCount and (tracker:GetMeleeEnemyCount() >= aoeThreshold)
 	local aoeActive = (db.aoe == true) or autoAoeActive
 	if aoeActive and gcdReady and IsUsable(ns.SPELLS.CONSECRATION) and self:IsReady(ns.SPELLS.CONSECRATION) then
 		Add(ns.SPELLS.CONSECRATION, false)
@@ -478,8 +484,10 @@ function PriorityQueue:Evaluate()
 		ConsiderUpcoming(ns.SPELLS.HOLY_SHOCK, true)
 	end
 	if aoeActive then
-		ConsiderUpcoming(ns.SPELLS.CONSECRATION, false)
-		if hasTarget and exorcismTarget then
+		if not IsNoMana(ns.SPELLS.CONSECRATION) then
+			ConsiderUpcoming(ns.SPELLS.CONSECRATION, false)
+		end
+		if hasTarget and exorcismTarget and not IsNoMana(ns.SPELLS.HOLY_WRATH) then
 			ConsiderUpcoming(ns.SPELLS.HOLY_WRATH, false)
 		end
 	end
