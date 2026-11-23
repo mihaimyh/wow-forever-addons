@@ -316,3 +316,7 @@ function Config:Open()
 		Settings.OpenToCategory(self.category:GetID())
 	end
 end
+
+function ns:OpenOptions()
+	Config:Open()
+end

@@ -1917,6 +1917,42 @@ Test("44. Mana-saving options: Auto-AoE threshold, Boss-only Crusader opener, an
 	AssertEq(pq:Evaluate(), "Holy Strike", "When Consecration hits insufficientPower, skip Crusader opener and stay on core DPS")
 end)
 
+Test("45. /rp config opens the Settings panel via ns:OpenOptions", function()
+	local openedCategoryID
+	local c = CreateEnv({})
+	c.env.Settings = {
+		VarType = { Boolean = "boolean", String = "string", Number = "number" },
+		RegisterVerticalLayoutCategory = function(name)
+			local cat = { _id = 777, GetID = function(self) return self._id end }
+			local layout = { AddInitializer = function() end }
+			return cat, layout
+		end,
+		RegisterVerticalLayoutSubcategory = function(parent, name)
+			local cat = { _id = 778, GetID = function(self) return self._id end }
+			local layout = { AddInitializer = function() end }
+			return cat, layout
+		end,
+		RegisterAddOnSetting = function()
+			return { SetValueChangedCallback = function() end }
+		end,
+		CreateCheckbox = function() end,
+		CreateDropdown = function() end,
+		CreateControlTextContainer = function()
+			return { Add = function() end, GetData = function() return {} end }
+		end,
+		CreateSliderOptions = function()
+			return { SetLabelFormatter = function() end }
+		end,
+		CreateSlider = function() end,
+		RegisterAddOnCategory = function() end,
+		OpenToCategory = function(id) openedCategoryID = id end,
+	}
+	c.ns:GetModule("Config"):OnInitialize()
+	Assert(c.ns.OpenOptions ~= nil, "Config must define ns:OpenOptions for /rp config")
+	c.env.SlashCmdList.RETPULSE("config")
+	AssertEq(openedCategoryID, 777, "/rp config must open the RetPulse Settings category")
+end)
+
 print(string.format("\nResults: %d passed, %d failed", passed, failed))
 if failed > 0 then
 	os.exit(1)
