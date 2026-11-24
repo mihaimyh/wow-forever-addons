@@ -90,6 +90,17 @@ local function CreateEnv(opts)
 	spellById[19850] = "Blessing of Wisdom"
 	spellById[7294] = "Retribution Aura"
 	spellById[465] = "Devotion Aura"
+	spellById[1953] = "Blink"
+	spellById[2061] = "Flash Heal"
+	spellById[20066] = "Repentance"
+	spellById[1044] = "Blessing of Freedom"
+	spellById[642] = "Divine Shield"
+	spellById[498] = "Divine Protection"
+	spellById[1022] = "Blessing of Protection"
+	spellById[7744] = "Will of the Forsaken"
+	spellById[59752] = "Every Man for Himself"
+	spellById[31884] = "Avenging Wrath"
+	spellById[20164] = "Seal of Justice"
 
 	local registeredFrames = {}
 	local timers = {}
@@ -206,6 +217,7 @@ local function CreateEnv(opts)
 	function env.strtrim(s) return (s:gsub("^%s+", ""):gsub("%s+$", "")) end
 	function env.date() return "2026-11-22 02:00:00" end
 	function env.GetTime() return now end
+	function env.time() return math.floor(now) end
 	function env.GetBuildInfo() return "1.60.1", "70938", "Nov 12 2026", 16001 end
 	function env.InCombatLockdown() return inCombat end
 	function env.IsInInstance() return false end
@@ -411,6 +423,7 @@ local function CreateEnv(opts)
 		"Keybinds.lua",
 		"WeaponEngine.lua",
 		"CombatTracker.lua",
+		"PvPEngine.lua",
 		"PriorityQueue.lua",
 		"Talents.lua",
 		"Diag.lua",
@@ -2565,6 +2578,782 @@ Test("60. Seal of Justice anti-runner triggers when mobile enemy player escapes 
 	local pq = c.ns:GetModule("PriorityQueue")
 	AssertEq(pq:Evaluate(), "Seal of Justice", "Escaping Druid must trigger Seal of Justice")
 	AssertEq(pq.currentPvpLabel, "STOP RUNNER", "Status label must be STOP RUNNER")
+end)
+
+Test("61. BG secret auras suppress false BUFF/AURA MISSING spam, remind once after death, and BG secret CDs use cast model", function()
+	local dead = false
+	local c = CreateEnv({
+		inCombat = false,
+		targetExists = false,
+		knownSpells = {
+			["Judgement"] = 20271,
+			["Blessing of Kings"] = 20217,
+			["Retribution Aura"] = 7294,
+		},
+		usableSpells = {
+			["Judgement"] = true,
+			["Blessing of Kings"] = true,
+			["Retribution Aura"] = true,
+		},
+	})
+	c.env.IsInInstance = function() return true, "pvp" end
+	c.env.C_Secrets = { ShouldAurasBeSecret = function() return true end }
+	c.env.C_UnitAuras.GetAuraDataByIndex = function()
+		error("GetAuraDataByIndex(): Auras cannot be accessed when secret while tainted by 'RetPulse'")
+	end
+	c.env.UnitIsDeadOrGhost = function() return dead end
+	c.env.C_Spell.GetSpellCooldown = function()
+		return { startTime = setmetatable({ __secret = true }, {}), duration = setmetatable({ __secret = true }, {}), isEnabled = true }
+	end
+
+	local tracker = c.ns:GetModule("CombatTracker")
+	tracker:RefreshSeal()
+	AssertEq(tracker:GetMissingBlessing(), nil, "Secret BG auras must NOT trigger false BUFF MISSING when player entered with buffs")
+	AssertEq(tracker:GetMissingAura(), nil, "Secret BG auras must NOT trigger false AURA MISSING before dying")
+
+	-- Player dies in BG and resurrects -> buffs were wiped by death, remind once!
+	dead = true
+	c.Fire("PLAYER_DEAD")
+	dead = false
+	AssertEq(tracker:GetMissingBlessing(), "Blessing of Kings", "After dying in BG and resurrecting, must remind Blessing")
+	AssertEq(tracker:GetMissingAura(), "Retribution Aura", "After dying in BG and resurrecting, must remind Aura")
+
+	-- Casting Blessing of Kings satisfies Blessing reminder while Aura reminder stays until Aura is cast
+	c.Fire("UNIT_SPELLCAST_SUCCEEDED", "player", "b1", 20217)
+	AssertEq(tracker:GetMissingBlessing(), nil, "Casting Blessing in BG clears post-death Blessing reminder")
+	AssertEq(tracker:GetMissingAura(), "Retribution Aura", "Casting Blessing alone does not prematurely clear missing Aura")
+	c.Fire("UNIT_SPELLCAST_SUCCEEDED", "player", "a1", 7294)
+	AssertEq(tracker:GetMissingAura(), nil, "Casting Aura in BG clears post-death Aura reminder")
+
+	-- Secret BG cooldowns out of combat fall back to cast-tracked model
+	c.Fire("UNIT_SPELLCAST_SUCCEEDED", "player", "j1", 20271)
+	local pq = c.ns:GetModule("PriorityQueue")
+	local rem, src = pq:GetRemainingInfo("Judgement")
+	AssertEq(src, "model", "Secret BG cooldown out of combat must fall back to cast model")
+	Assert(rem > 9.0, "Judgement cooldown must still read >9s from cast model")
+end)
+
+Test("62. PvP anti-immunity holds Burst, HoJ, and Judgement with IMMUNE! status until wound or target change", function()
+	local c = CreateEnv({
+		inCombat = true,
+		swingInRange = true,
+		knownSpells = {
+			["Judgement"] = 20271,
+			["Holy Strike"] = 678,
+			["Hammer of Justice"] = 853,
+			["Seal of Command"] = 20375,
+			["Avenging Wrath"] = 31884,
+		},
+		usableSpells = {
+			["Judgement"] = true,
+			["Holy Strike"] = true,
+			["Hammer of Justice"] = true,
+			["Seal of Command"] = true,
+			["Avenging Wrath"] = true,
+		},
+		inRangeSpells = {
+			["Judgement"] = true,
+			["Holy Strike"] = true,
+			["Hammer of Justice"] = true,
+		},
+	})
+	c.env.UnitIsPlayer = function(u) return u == "target" end
+	c.Fire("UNIT_SPELLCAST_SUCCEEDED", "player", "sc", 20375)
+	c.Advance(1.6)
+
+	local pq = c.ns:GetModule("PriorityQueue")
+	local ui = c.ns:GetModule("UI")
+	c.Fire("UNIT_COMBAT", "target", "IMMUNE")
+	local cur = pq:Evaluate()
+	AssertEq(pq.currentTargetImmune, true, "IMMUNE event must mark currentTargetImmune=true")
+	AssertEq(cur, nil, "Must hold all offensive abilities while target is immune")
+	ui:Refresh()
+	AssertEq(ui.status:GetText(), "IMMUNE!", "HUD status must display IMMUNE!")
+
+	c.Fire("UNIT_COMBAT", "target", "WOUND")
+	cur = pq:Evaluate()
+	AssertEq(pq.currentTargetImmune, false, "WOUND event clears immunity hold")
+	AssertEq(cur, "Avenging Wrath", "Burst/offense resumes once immunity fades")
+end)
+
+Test("63. PvP Stun Combo holds Judgement during Seal GCD, triggers JUDGE STUN! #1 after HoJ, respects Repentance overlap and Stun DR", function()
+	local c = CreateEnv({
+		inCombat = true,
+		swingInRange = true,
+		knownSpells = {
+			["Judgement"] = 20271,
+			["Holy Strike"] = 678,
+			["Hammer of Justice"] = 853,
+			["Repentance"] = 20066,
+			["Seal of Command"] = 20375,
+		},
+		usableSpells = {
+			["Judgement"] = true,
+			["Holy Strike"] = true,
+			["Hammer of Justice"] = true,
+			["Repentance"] = true,
+			["Seal of Command"] = true,
+		},
+		inRangeSpells = {
+			["Judgement"] = true,
+			["Holy Strike"] = true,
+			["Hammer of Justice"] = true,
+			["Repentance"] = true,
+		},
+	})
+	c.env.UnitIsPlayer = function(u) return u == "target" end
+	c.env.UnitGUID = function(u) return "Player-1234" end
+	c.ns.db.suggestBurst = false
+
+	-- Right after casting Seal of Command (1.5s GCD active): must wait for HoJ instead of burning Judgement first.
+	-- Preview polish: show HoJ (STUN COMBO!) waiting on GCD with NEXT = Judgement, never Holy Strike.
+	c.Fire("UNIT_SPELLCAST_SUCCEEDED", "player", "sc", 20375)
+	local pq = c.ns:GetModule("PriorityQueue")
+	local cur, nxt = pq:Evaluate()
+	Assert(cur ~= "Judgement", "Must hold Judgement during Seal of Command GCD when HoJ Stun Combo is ready")
+	AssertEq(cur, "Hammer of Justice", "During SoC GCD, HUD must preview Hammer of Justice for STUN COMBO!")
+	AssertEq(nxt, "Judgement", "During SoC GCD, NEXT must preview Judgement after HoJ")
+	AssertEq(pq.currentPvpLabel, "STUN COMBO!", "During SoC GCD, label must stay STUN COMBO!")
+	Assert(type(pq.countdown) == "number" and pq.countdown > 0.5 and pq.countdown <= 1.5,
+		"During SoC GCD, countdown must reflect remaining GCD (~1.2s), not Holy Strike CD")
+
+	-- Once GCD ends: HoJ (STUN COMBO!) -> cast HoJ -> Judgement (JUDGE STUN!)
+	c.Advance(1.6)
+	AssertEq(pq:Evaluate(), "Hammer of Justice", "Ready HoJ must open STUN COMBO!")
+	AssertEq(pq.currentPvpLabel, "STUN COMBO!", "Label must be STUN COMBO!")
+
+	c.Fire("UNIT_SPELLCAST_SUCCEEDED", "player", "hoj1", 853)
+	c.Advance(1.6)
+	AssertEq(pq:Evaluate(), "Judgement", "After HoJ lands with SoC, Judgement must fire as JUDGE STUN!")
+	AssertEq(pq.currentPvpLabel, "JUDGE STUN!", "Label must be JUDGE STUN!")
+
+	-- Cast Judgement + advance past HoJ DR window? Wait: reset HoJ CD manually without advancing 18s DR -> STUN DR suppresses 2nd HoJ!
+	c.Fire("UNIT_SPELLCAST_SUCCEEDED", "player", "j1", 20271)
+	c.Advance(10.5)
+	pq.cdUntil["Hammer of Justice"] = nil
+	AssertEq(pq:Evaluate(), "Judgement", "Second HoJ within 18s DR window must be suppressed in favor of Judgement")
+
+	-- On fresh target, Repentance active prevents HoJ overlap
+	c.env.UnitGUID = function() return "Player-9999" end
+	c.Fire("PLAYER_TARGET_CHANGED")
+	c.Fire("UNIT_SPELLCAST_SUCCEEDED", "player", "rep1", 20066)
+	c.Advance(1.6)
+	AssertEq(pq:Evaluate(), "Judgement", "Active Repentance must prevent HoJ stun overlap")
+end)
+
+Test("64. PvP Smart Matchup: saves HoJ vs Healers, catches Mage Blink with Repentance, and gates Burst to melee", function()
+	local swingRange = false
+	local targetClass = "PRIEST"
+	local c = CreateEnv({
+		inCombat = true,
+		swingInRange = false,
+		knownSpells = {
+			["Judgement"] = 20271,
+			["Holy Strike"] = 678,
+			["Hammer of Justice"] = 853,
+			["Repentance"] = 20066,
+			["Seal of Command"] = 20375,
+			["Avenging Wrath"] = 31884,
+		},
+		usableSpells = {
+			["Judgement"] = true,
+			["Holy Strike"] = true,
+			["Hammer of Justice"] = true,
+			["Repentance"] = true,
+			["Seal of Command"] = true,
+			["Avenging Wrath"] = true,
+		},
+		inRangeSpells = {
+			["Judgement"] = true,
+			["Holy Strike"] = false,
+			["Hammer of Justice"] = true,
+			["Repentance"] = true,
+		},
+	})
+	c.env.UnitIsPlayer = function(u) return u == "target" end
+	c.env.UnitClass = function(u)
+		if u == "target" then return targetClass, targetClass end
+		return "Paladin", "PALADIN"
+	end
+	c.env.C_SwingTimer.IsTargetWithinSwingRange = function() return swingRange end
+
+	c.Fire("UNIT_SPELLCAST_SUCCEEDED", "player", "sc", 20375)
+	c.Advance(1.6)
+
+	local pq = c.ns:GetModule("PriorityQueue")
+	-- Out of melee: Burst must wait (don't waste Avenging Wrath at range)
+	swingRange = true
+	-- Target is a Priest (Healer) at full HP with no Burst: save HoJ instead of cold stun!
+	c.ns.db.suggestBurst = false
+	AssertEq(pq:Evaluate(), "Judgement", "Must save HoJ vs Healer instead of blowing cold stun combo")
+
+	-- Re-enable Burst: in melee with Judgement ready, Avenging Wrath fires
+	c.ns.db.suggestBurst = true
+	AssertEq(pq:Evaluate(), "Avenging Wrath", "Burst fires once in melee range with SoC & Judgement ready")
+
+	-- Switch to Mage who Blinks out of melee -> Repentance CATCH BLINK!
+	targetClass = "MAGE"
+	swingRange = false
+	c.Fire("PLAYER_TARGET_CHANGED")
+	c.Fire("UNIT_SPELLCAST_SUCCEEDED", "target", "b1", 1953)
+	AssertEq(pq:Evaluate(), "Repentance", "Mage Blink out of melee must trigger Repentance CATCH BLINK!")
+	AssertEq(pq.currentPvpLabel, "CATCH BLINK!", "Label must be CATCH BLINK!")
+end)
+
+Test("65. PvP 30yd Execute Snipe prioritizes Hammer of Wrath (FINISH!) when usable at range", function()
+	local c = CreateEnv({
+		inCombat = true,
+		swingInRange = false,
+		knownSpells = {
+			["Judgement"] = 20271,
+			["Holy Strike"] = 678,
+			["Hammer of Wrath"] = 24275,
+			["Repentance"] = 20066,
+			["Seal of Command"] = 20375,
+		},
+		usableSpells = {
+			["Judgement"] = true,
+			["Holy Strike"] = true,
+			["Hammer of Wrath"] = true,
+			["Repentance"] = true,
+			["Seal of Command"] = true,
+		},
+		inRangeSpells = {
+			["Judgement"] = false,
+			["Holy Strike"] = false,
+			["Hammer of Wrath"] = true,
+			["Repentance"] = true,
+		},
+	})
+	c.env.UnitIsPlayer = function(u) return u == "target" end
+	c.Fire("UNIT_SPELLCAST_SUCCEEDED", "player", "sc", 20375)
+	c.Advance(1.6)
+
+	local pq = c.ns:GetModule("PriorityQueue")
+	AssertEq(pq:Evaluate(), "Hammer of Wrath", "Usable HoW at 30yd on escaping player must trigger FINISH!")
+	AssertEq(pq.currentPvpLabel, "FINISH!", "Label must be FINISH!")
+end)
+
+Test("66. PvP targeted CC Breaker: Stun skips WotF -> uses PvP Trinket, and 2+ attackers + Stun prompts Bubble / low-level Divine Protection", function()
+	local locList = { { locType = "STUN", timeRemaining = 4.0 } }
+	local attackers = { "nameplate1" }
+	local c = CreateEnv({
+		inCombat = true,
+		swingInRange = true,
+		knownSpells = {
+			["Will of the Forsaken"] = 7744,
+			["Divine Shield"] = 642,
+			["Judgement"] = 20271,
+			["Seal of Command"] = 20375,
+		},
+		usableSpells = {
+			["Will of the Forsaken"] = true,
+			["Divine Shield"] = true,
+			["Judgement"] = true,
+			["Seal of Command"] = true,
+		},
+	})
+	c.env.UnitIsPlayer = function(u) return u == "target" or u:find("^nameplate") ~= nil end
+	c.env.UnitExists = function(u) return true end
+	c.env.UnitCanAttack = function(_, u) return true end
+	c.env.UnitIsDead = function() return false end
+	c.env.UnitIsUnit = function(a, b)
+		return b == "player" and a:find("target$") ~= nil
+	end
+	c.env.C_NamePlate.GetNamePlates = function()
+		local r = {}
+		for _, u in ipairs(attackers) do r[#r + 1] = { unitToken = u } end
+		return r
+	end
+	c.env.C_LossOfControl = {
+		GetActiveLossOfControlDataCount = function() return #locList end,
+		GetActiveLossOfControlData = function(i) return locList[i] end,
+	}
+	c.env.GetInventoryItemID = function(_, slot) return slot == 13 and 18854 or 5322 end
+	c.env.C_Item = {
+		GetItemSpell = function(id) return id == 18854 and "PvP Trinket" or nil end,
+		GetItemCooldown = function() return 0, 0, 1 end,
+	}
+
+	c.Fire("UNIT_SPELLCAST_SUCCEEDED", "player", "sc", 20375)
+	c.Advance(1.6)
+
+	local pq = c.ns:GetModule("PriorityQueue")
+	-- 1 attacker + 4s Stun: WotF cannot break Stun, so equipped PvP Trinket triggers!
+	AssertEq(pq:Evaluate(), "PvP Trinket", "4s Stun with WotF only must skip WotF and trigger PvP Trinket")
+	AssertEq(pq.currentPvpLabel, "TRINKET!", "Label must be TRINKET!")
+
+	-- Put PvP Trinket on CD and add a 2nd attacker -> Divine Shield (BUBBLE!)
+	c.env.C_Item.GetItemCooldown = function() return c.env.GetTime() - 5, 120, 1 end
+	attackers = { "nameplate1", "nameplate2" }
+	c.Advance(0.25)
+	AssertEq(pq:Evaluate(), "Divine Shield", "2+ attackers while hard-CC'd must prompt Divine Shield BUBBLE!")
+	AssertEq(pq.currentPvpLabel, "BUBBLE!", "Label must be BUBBLE!")
+end)
+
+Test("67. PvP 360 nameplate radar alerts OFF-KICK! when another nearby player casts an interruptible spell", function()
+	local c = CreateEnv({
+		inCombat = true,
+		swingInRange = true,
+		nameplates = {
+			{ unit = "nameplate1", hostile = true, dead = false, inRange = true },
+			{ unit = "nameplate2", hostile = true, dead = false, inRange = true },
+		},
+		knownSpells = {
+			["Judgement"] = 20271,
+			["Holy Strike"] = 678,
+			["Hammer of Justice"] = 853,
+			["Seal of Command"] = 20375,
+		},
+		usableSpells = {
+			["Judgement"] = true,
+			["Holy Strike"] = true,
+			["Hammer of Justice"] = true,
+			["Seal of Command"] = true,
+		},
+	})
+	c.env.UnitIsPlayer = function() return true end
+	c.env.UnitIsUnit = function(a, b) return a == b or (a == "nameplate1" and b == "target") end
+	c.env.UnitName = function(u) return u == "nameplate2" and "EnemyPriest" or "EnemyWarrior" end
+	c.env.UnitCastingInfo = function(u)
+		if u == "nameplate2" then
+			return "Flash Heal", "Flash Heal", 0, 1000, 1002, false, "c2", false
+		end
+		return nil
+	end
+
+	local pq = c.ns:GetModule("PriorityQueue")
+	local ui = c.ns:GetModule("UI")
+	c.Fire("UNIT_SPELLCAST_SUCCEEDED", "player", "sc", 20375)
+	c.Advance(1.6)
+
+	pq:Evaluate()
+	Assert(pq.currentOffTargetAlert ~= nil, "Off-target cast on nameplate2 must populate currentOffTargetAlert")
+	AssertEq(pq.currentOffTargetAlert.caster, "EnemyPriest", "Off-target alert must identify caster name")
+	ui:Refresh()
+	AssertEq(ui.status:GetText(), "OFF-KICK: EnemyPriest", "HUD status must show OFF-KICK: EnemyPriest")
+end)
+
+Test("68. PvP Teammate Peel and Anti-Stealth Vanish Consecration reflex", function()
+	local targetExists = true
+	local targetClass = "WARRIOR"
+	local c = CreateEnv({
+		inCombat = true,
+		swingInRange = true,
+		knownSpells = {
+			["Judgement"] = 20271,
+			["Holy Strike"] = 678,
+			["Hammer of Justice"] = 853,
+			["Consecration"] = 26573,
+			["Blessing of Protection"] = 1022,
+			["Seal of Command"] = 20375,
+		},
+		usableSpells = {
+			["Judgement"] = true,
+			["Holy Strike"] = true,
+			["Hammer of Justice"] = true,
+			["Consecration"] = true,
+			["Blessing of Protection"] = true,
+			["Seal of Command"] = true,
+		},
+		inRangeSpells = {
+			["Judgement"] = true,
+			["Holy Strike"] = true,
+			["Hammer of Justice"] = true,
+		},
+	})
+	c.env.IsInGroup = function() return true end
+	c.env.UnitIsPlayer = function() return true end
+	c.env.UnitExists = function(u) return targetExists end
+	c.env.UnitIsFriend = function(_, u) return u == "targettarget" end
+	c.env.UnitIsUnit = function(a, b) return a == b end
+	c.env.UnitClass = function(u)
+		if u == "targettarget" then return "Priest", "PRIEST" end
+		return targetClass, targetClass
+	end
+
+	c.Fire("UNIT_SPELLCAST_SUCCEEDED", "player", "sc", 20375)
+	c.Advance(1.6)
+	local pq = c.ns:GetModule("PriorityQueue")
+	c.ns.db.suggestBurst = false
+
+	-- Warrior targeting our Priest -> PEEL!
+	AssertEq(pq:Evaluate(), "Hammer of Justice", "Warrior on friendly Priest must trigger Hammer of Justice PEEL!")
+	AssertEq(pq.currentPvpLabel, "PEEL!", "Label must be PEEL!")
+
+	-- Switch to Rogue in melee, then Rogue Vanishes (target cleared without dying) -> UNSTEALTH!
+	targetClass = "ROGUE"
+	c.Fire("PLAYER_TARGET_CHANGED")
+	c.env.UnitIsFriend = function() return false end
+	pq:Evaluate()
+	targetExists = false
+	c.Fire("PLAYER_TARGET_CHANGED")
+	c.Advance(0.1)
+	AssertEq(pq:Evaluate(), "Consecration", "Vanishing melee Rogue must trigger Consecration UNSTEALTH!")
+	AssertEq(pq.currentPvpLabel, "UNSTEALTH!", "Label must be UNSTEALTH!")
+end)
+
+Test("69. Strict PvE and AV Boss isolation: NPC target inside Battleground uses pure PvE rotation", function()
+	local c = CreateEnv({
+		inCombat = true,
+		swingInRange = true,
+		knownSpells = {
+			["Judgement"] = 20271,
+			["Holy Strike"] = 678,
+			["Hammer of Justice"] = 853,
+			["Seal of Command"] = 20375,
+			["Seal of Righteousness"] = 20288,
+		},
+		usableSpells = {
+			["Judgement"] = true,
+			["Holy Strike"] = true,
+			["Hammer of Justice"] = true,
+			["Seal of Command"] = true,
+			["Seal of Righteousness"] = true,
+		},
+		inRangeSpells = {
+			["Judgement"] = true,
+			["Holy Strike"] = true,
+			["Hammer of Justice"] = true,
+		},
+	})
+	c.env.IsInInstance = function() return true, "pvp" end
+	c.env.UnitIsPlayer = function() return false end
+	c.Fire("UNIT_SPELLCAST_SUCCEEDED", "player", "sr", 20288)
+	c.Advance(1.6)
+
+	local pq = c.ns:GetModule("PriorityQueue")
+	AssertEq(pq:Evaluate(), "Judgement", "NPC boss in AV must stay on pure PvE Judgement, never HoJ stun combo")
+	AssertEq(pq.currentIsPvp, false, "NPC target inside BG must keep currentIsPvp=false")
+end)
+
+Test("70. Secret booleans from UnitIsUnit / UnitIsFriend / UnitExists on targettarget & nameplates never throw or lock HUD", function()
+	local secretTrue = setmetatable({ __secret = true, val = true }, {})
+	local secretFalse = setmetatable({ __secret = true, val = false }, {})
+	local c = CreateEnv({
+		inCombat = true,
+		swingInRange = true,
+		nameplates = {
+			{ unit = "nameplate1", hostile = true, dead = false, inRange = true },
+		},
+		knownSpells = {
+			["Judgement"] = 20271,
+			["Holy Strike"] = 678,
+			["Hammer of Justice"] = 853,
+			["Seal of Command"] = 20375,
+		},
+		usableSpells = {
+			["Judgement"] = true,
+			["Holy Strike"] = true,
+			["Hammer of Justice"] = true,
+			["Seal of Command"] = true,
+		},
+		inRangeSpells = {
+			["Judgement"] = true,
+			["Holy Strike"] = true,
+			["Hammer of Justice"] = true,
+		},
+	})
+	c.env.IsInGroup = function() return true end
+	c.env.UnitIsPlayer = function(u)
+		if u == "nameplate1" then return secretTrue end
+		return u == "target"
+	end
+	c.env.UnitExists = function(u)
+		if u == "targettarget" then return true end
+		return true
+	end
+	c.env.UnitIsUnit = function() return secretTrue end
+	c.env.UnitIsFriend = function() return secretFalse end
+	c.env.UnitClass = function(u)
+		if u == "targettarget" then return "Priest", "PRIEST" end
+		return "Warrior", "WARRIOR"
+	end
+
+	c.Fire("UNIT_SPELLCAST_SUCCEEDED", "player", "sc", 20375)
+	c.Advance(1.6)
+
+	local ui = c.ns:GetModule("UI")
+	local pq = c.ns:GetModule("PriorityQueue")
+	local cur = pq:Evaluate()
+	Assert(cur ~= nil, "Evaluation with secret unit booleans must succeed")
+	Assert(pq.currentPvpLabel ~= "PEEL!", "Secret UnitIsUnit/UnitIsFriend must never trigger false PEEL!")
+	ui:Refresh()
+	AssertEq(ui.consecutiveErrors, 0, "HUD Refresh must stay at 0 consecutive errors")
+	AssertEq(ui.frame:IsShown(), true, "HUD must remain visible when targettarget booleans are secret")
+end)
+
+Test("71. Battleground teammate click-to-buff works with secret auras via cast tracking and death reset", function()
+	local deadUnits = {}
+	local c = CreateEnv({
+		inCombat = false,
+		targetExists = false,
+		knownSpells = {
+			["Blessing of Kings"] = 20217,
+			["Blessing of Might"] = 19834,
+			["Retribution Aura"] = 7294,
+		},
+		usableSpells = {
+			["Blessing of Kings"] = true,
+			["Blessing of Might"] = true,
+			["Retribution Aura"] = true,
+		},
+	})
+	c.env.IsInInstance = function() return true, "pvp" end
+	c.env.C_Secrets = { ShouldAurasBeSecret = function() return true end }
+	c.env.C_UnitAuras.GetAuraDataByIndex = function()
+		error("GetAuraDataByIndex(): Auras cannot be accessed when secret while tainted by 'RetPulse'")
+	end
+	c.env.IsInGroup = function() return true end
+	c.env.IsInRaid = function() return true end
+	c.env.GetNumGroupMembers = function() return 2 end
+	c.env.UnitExists = function(u) return u == "raid1" or u == "raid2" end
+	c.env.UnitIsConnected = function() return true end
+	c.env.UnitIsDeadOrGhost = function(u) return deadUnits[u] == true end
+	c.env.UnitIsUnit = function(a, b) return a == b end
+	c.env.UnitName = function(u)
+		if u == "raid1" then return "Grom" end
+		if u == "raid2" then return "Jaina" end
+		return "MyPaladin"
+	end
+	c.env.UnitClass = function(u)
+		if u == "raid1" then return "Warrior", "WARRIOR" end
+		if u == "raid2" then return "Mage", "MAGE" end
+		return "Paladin", "PALADIN"
+	end
+	c.env.C_Spell.IsSpellInRange = function(_, u) return u == "raid1" or u == "raid2" end
+
+	local tracker = c.ns:GetModule("CombatTracker")
+	c.Fire("PLAYER_ENTERING_WORLD")
+
+	-- 1st missing teammate: raid1 (Grom) -> Blessing of Kings
+	local spell, unit, uname = tracker:GetMissingGroupBlessing()
+	AssertEq(spell, "Blessing of Kings", "BG teammate raid1 should get Blessing of Kings")
+	AssertEq(unit, "raid1", "First unit should be raid1")
+	AssertEq(uname, "Grom", "First unit name should be Grom")
+
+	-- Cast Blessing of Kings on Grom -> moves automatically to raid2 (Jaina)
+	c.Fire("UNIT_SPELLCAST_SENT", "player", "Grom-Realm", "cast-1", 20217)
+	c.Fire("UNIT_SPELLCAST_SUCCEEDED", "player", "cast-1", 20217)
+	spell, unit, uname = tracker:GetMissingGroupBlessing()
+	AssertEq(spell, "Blessing of Kings", "BG teammate raid2 should now be suggested")
+	AssertEq(unit, "raid2", "Second unit should be raid2")
+	AssertEq(uname, "Jaina", "Second unit name should be Jaina")
+
+	-- Cast Blessing of Kings on Jaina -> all teammates covered, goes silent
+	c.Fire("UNIT_SPELLCAST_SENT", "player", "Jaina", "cast-2", 20217)
+	c.Fire("UNIT_SPELLCAST_SUCCEEDED", "player", "cast-2", 20217)
+	AssertEq(tracker:GetMissingGroupBlessing(), nil, "All buffed BG teammates should stop suggesting")
+
+	-- Grom dies and resurrects -> cast-tracker forgets his old buff and suggests Grom again
+	deadUnits["raid1"] = true
+	tracker:GetMissingGroupBlessing()
+	deadUnits["raid1"] = false
+	spell, unit, uname = tracker:GetMissingGroupBlessing()
+	AssertEq(spell, "Blessing of Kings", "Resurrected BG teammate should be re-suggested")
+	AssertEq(unit, "raid1", "Resurrected unit must be raid1")
+	AssertEq(uname, "Grom", "Resurrected unit name must be Grom")
+end)
+
+Test("72. BG buff filter skips invisible/dead/unreadable-range teammates, handles secret castGUID & UnitName, and skips failed casts", function()
+	local secretVal = setmetatable({ __secret = true }, {
+		__tostring = function() error("secret") end,
+	})
+	local deadMap = { raid1 = true } -- raid1 is dead (UnitIsDead=true even if UnitIsDeadOrGhost=false)
+	local visibleMap = { raid1 = true, raid2 = false, raid3 = true, raid4 = true, raid5 = true }
+	local c = CreateEnv({
+		inCombat = false,
+		targetExists = false,
+		knownSpells = {
+			["Blessing of Kings"] = 20217,
+		},
+		usableSpells = {
+			["Blessing of Kings"] = true,
+		},
+	})
+	c.env.IsInInstance = function() return true, "pvp" end
+	c.env.C_Secrets = { ShouldAurasBeSecret = function() return true end }
+	c.env.IsInGroup = function() return true end
+	c.env.IsInRaid = function() return true end
+	c.env.GetNumGroupMembers = function() return 5 end
+	c.env.UnitExists = function(u) return u == "raid1" or u == "raid2" or u == "raid3" or u == "raid4" or u == "raid5" end
+	c.env.UnitIsConnected = function() return true end
+	c.env.UnitIsVisible = function(u) return visibleMap[u] == true end
+	c.env.UnitIsDeadOrGhost = function() return false end
+	c.env.UnitIsDead = function(u) return deadMap[u] == true end
+	c.env.UnitIsGhost = function() return false end
+	c.env.UnitIsUnit = function(a, b) return a == b end
+	c.env.UnitName = function(u)
+		if u == "raid4" then return secretVal end
+		if u == "raid5" then return "Thrall" end
+		return u
+	end
+	c.env.UnitClass = function() return "Warrior", "WARRIOR" end
+	c.env.C_Spell.IsSpellInRange = function(_, u)
+		if u == "raid3" then return nil end -- unknown/nil range must NOT default to inRange=true!
+		if u == "raid4" or u == "raid5" then return true end
+		return false
+	end
+
+	local tracker = c.ns:GetModule("CombatTracker")
+	c.Fire("PLAYER_ENTERING_WORLD")
+
+	-- raid1 (dead), raid2 (invisible/far), raid3 (nil range) must ALL be skipped -> goes straight to raid4!
+	local spell, unit = tracker:GetMissingGroupBlessing()
+	AssertEq(unit, "raid4", "Dead (raid1), invisible (raid2), and unknown-range (raid3) must be skipped -> raid4")
+	AssertEq(spell, "Blessing of Kings", "raid4 gets Blessing of Kings")
+
+	-- Secret castGUID + secret targetName must NOT crash and must mark raid4 buffed via lastSuggestedBuffUnit
+	c.Fire("UNIT_SPELLCAST_SENT", "player", secretVal, secretVal, 20217)
+	c.Fire("UNIT_SPELLCAST_SUCCEEDED", "player", secretVal, 20217)
+
+	spell, unit = tracker:GetMissingGroupBlessing()
+	AssertEq(unit, "raid5", "After casting on raid4 with secret castGUID/name, must advance to raid5 (never repeat raid4)")
+
+	-- If raid5 returns Out of range error, immediately skip raid5 for 10s
+	c.Fire("UI_ERROR_MESSAGE", 1, "Out of range.")
+	AssertEq(tracker:GetMissingGroupBlessing(), nil, "Failed Out of range cast must skip raid5 immediately")
+end)
+
+Test("73. HUD click-to-buff PreClick marks exact teammate even when UNIT_SPELLCAST_SENT says Unknown or cross-realm (*)", function()
+	local c = CreateEnv({
+		inCombat = false,
+		targetExists = false,
+		knownSpells = {
+			["Blessing of Kings"] = 20217,
+		},
+		usableSpells = {
+			["Blessing of Kings"] = true,
+		},
+	})
+	c.env.IsInInstance = function() return true, "pvp" end
+	c.env.C_Secrets = { ShouldAurasBeSecret = function() return true end }
+	c.env.IsInGroup = function() return true end
+	c.env.IsInRaid = function() return true end
+	c.env.GetNumGroupMembers = function() return 2 end
+	c.env.UnitExists = function(u) return u == "raid1" or u == "raid2" end
+	c.env.UnitIsConnected = function() return true end
+	c.env.UnitIsDeadOrGhost = function() return false end
+	c.env.UnitIsUnit = function(a, b) return a == b end
+	c.env.UnitName = function(u)
+		if u == "raid1" then return "Иван" end
+		if u == "raid2" then return "Morthor (*)" end
+		return "MyPaladin"
+	end
+	c.env.UnitGUID = function(u) return "Guid-" .. tostring(u) end
+	c.env.UnitClass = function() return "Warrior", "WARRIOR" end
+	c.env.C_Spell.IsSpellInRange = function(_, u) return u == "raid1" or u == "raid2" end
+
+	local ui = c.ns:GetModule("UI")
+	local tracker = c.ns:GetModule("CombatTracker")
+	c.ns.db.lastOwnBlessing = { name = "Blessing of Kings", expiresAt = c.env.time() + 300 }
+	tracker.ownBlessings = { ["Blessing of Kings"] = true }
+	tracker.ownBlessingExpiry = { ["Blessing of Kings"] = c.env.GetTime() + 300 }
+	c.Fire("PLAYER_ENTERING_WORLD")
+	ui:Refresh()
+	AssertEq(ui.status:GetText(), "BUFF: Иван", "Initial HUD must suggest Иван")
+	AssertEq(ui.clickUnit, "raid1", "clickUnit must be raid1")
+
+	-- Simulate clicking HUD (PreClick) + Blizzard reporting "Unknown" in UNIT_SPELLCAST_SENT
+	tracker:NoteBuffClick(ui.clickUnit, ui.clickUnitName, ui.clickSpell)
+	c.Fire("UNIT_SPELLCAST_SENT", "player", "Unknown", "c1", 20217)
+	c.Fire("UNIT_SPELLCAST_SUCCEEDED", "player", "c1", 20217)
+
+	AssertEq(ui.status:GetText(), "BUFF: Morthor (*)", "After buffing Иван, HUD must immediately advance to Morthor (*)")
+	AssertEq(ui.clickUnit, "raid2", "clickUnit must now be raid2")
+
+	-- Second click with cross-realm "Morthor-Icecrown" in SENT -> advances to no remaining buffs
+	tracker:NoteBuffClick(ui.clickUnit, ui.clickUnitName, ui.clickSpell)
+	c.Fire("UNIT_SPELLCAST_SENT", "player", "Morthor-Icecrown", "c2", 20217)
+	c.Fire("UNIT_SPELLCAST_SUCCEEDED", "player", "c2", 20217)
+	AssertEq(tracker:GetMissingGroupBlessing(), nil, "Both Иван and Morthor must stay marked buffed")
+end)
+
+Test("74. BG self-buff reminder, self Freedom overwrite, currentInRange=false propagation, and persisted weapon speed", function()
+	local savedDB = {}
+	local speedSecret = false
+	local c = CreateEnv({
+		inCombat = false,
+		targetExists = false,
+		weaponSpeed = 3.50,
+		weaponItemID = 19854,
+		savedDB = savedDB,
+		knownSpells = {
+			["Blessing of Kings"] = 20217,
+			["Blessing of Freedom"] = 1044,
+			["Retribution Aura"] = 7294,
+			["Judgement"] = 20271,
+			["Holy Strike"] = 678,
+			["Seal of Command"] = 20375,
+		},
+		usableSpells = {
+			["Blessing of Kings"] = true,
+			["Blessing of Freedom"] = true,
+			["Retribution Aura"] = true,
+			["Judgement"] = true,
+			["Holy Strike"] = true,
+			["Seal of Command"] = true,
+		},
+		inRangeSpells = {
+			["Judgement"] = false,
+			["Holy Strike"] = false,
+		},
+	})
+	c.env.IsInInstance = function() return true, "pvp" end
+	c.env.C_Secrets = { ShouldAurasBeSecret = function() return true end }
+	c.env.UnitAttackSpeed = function()
+		if speedSecret then return setmetatable({ __secret = true }, {}) end
+		return 3.50
+	end
+
+	local tracker = c.ns:GetModule("CombatTracker")
+	local ui = c.ns:GetModule("UI")
+	local engine = c.ns:GetModule("WeaponEngine")
+	AssertEq(savedDB.weaponSpeedCache[19854], 3.5, "Readable weapon speed must persist in weaponSpeedCache")
+
+	-- Entering BG unbuffed -> immediately suggests player's own Blessing of Kings on unit="player"
+	c.Fire("PLAYER_ENTERING_WORLD")
+	ui:Refresh()
+	AssertEq(ui.status:GetText(), "BUFF MISSING", "Unbuffed BG entry must prompt BUFF MISSING")
+	AssertEq(ui.clickUnit, "player", "Self-buff click-to-cast must force unit='player'")
+
+	-- Clicking BUFF MISSING on HUD (PreClick passes unit="player", unitName="You") clears reminder
+	tracker:NoteBuffClick(ui.clickUnit, ui.clickUnitName, ui.clickSpell)
+	c.Fire("UNIT_SPELLCAST_SENT", "player", "Unknown", "b1", 20217)
+	c.Fire("UNIT_SPELLCAST_SUCCEEDED", "player", "b1", 20217)
+	AssertEq(tracker:GetMissingBlessing(), nil, "Clicking BUFF MISSING on HUD in BG must clear self-buff reminder")
+	Assert(ui.status:GetText() ~= "BUFF MISSING", "HUD must immediately clear BUFF MISSING after self click-to-cast")
+	Assert(savedDB.lastOwnBlessing and savedDB.lastOwnBlessing.name == "Blessing of Kings", "Self-buff must persist in DB")
+
+	-- Advancing 245s (< 60s left on 300s Blessing) triggers early refresh even in BG!
+	c.Advance(245)
+	AssertEq(tracker:GetMissingBlessing(), "Blessing of Kings", "Own Blessing with <60s left in BG must trigger refresh")
+
+	-- Re-buff, then cast Blessing of Freedom on self -> overwrites own stat Blessing and prompts Kings again!
+	c.Fire("UNIT_SPELLCAST_SUCCEEDED", "player", "b2", 20217)
+	AssertEq(tracker:GetMissingBlessing(), nil, "Fresh self-blessing clears reminder")
+	c.Fire("UNIT_SPELLCAST_SUCCEEDED", "player", "bf1", 1044)
+	AssertEq(tracker:GetMissingBlessing(), "Blessing of Kings", "Self Blessing of Freedom must invalidate stat blessing and re-prompt Kings")
+
+	-- Out-of-range spell in PriorityQueue must preserve false (not convert false -> nil)
+	c.SetCombat(true)
+	c.Fire("UNIT_SPELLCAST_SUCCEEDED", "player", "sc", 20375)
+	c.Advance(1.6)
+	local pq = c.ns:GetModule("PriorityQueue")
+	c.env.UnitExists = function(u) return u == "target" end
+	c.env.UnitCanAttack = function(_, u) return u == "target" end
+	pq:Evaluate()
+	AssertEq(pq.currentInRange, false, "Out-of-range ability must set currentInRange=false, never nil")
+
+	-- Simulate /reload inside BG where UnitAttackSpeed is secret -> weaponSpeed restores from weaponSpeedCache
+	speedSecret = true
+	local c2 = CreateEnv({
+		inCombat = false,
+		weaponItemID = 19854,
+		weaponSpeedSecret = true,
+		savedDB = savedDB,
+	})
+	AssertEq(c2.ns:GetModule("WeaponEngine").weaponSpeed, 3.5, "BG reload with secret weapon speed must restore from cache")
 end)
 
 print(string.format("\nResults: %d passed, %d failed", passed, failed))

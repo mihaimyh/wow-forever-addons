@@ -245,22 +245,45 @@ function Config:OnInitialize()
 		-- Subcategory 1b: PvP
 		-----------------------------------------------------------------------
 		local pvpCat, pvpLayout = MakeSubcategory("PvP")
-		AddSection(pvpLayout, "PvP Intelligence (Hostile Players Only)")
+		AddSection(pvpLayout, "Core & Target Matchups")
 
 		self:AddCheckbox(pvpCat, "RetPulse_PvpEnabled", "pvpEnabled",
 			"Enable PvP mode", "Activates smart PvP rotation and alerts only against hostile players or in Battlegrounds. Never affects PvE.")
 
 		self:AddCheckbox(pvpCat, "RetPulse_PvpStunCombo", "pvpStunCombo",
-			"Stun burst combo (HoJ -> Judgement)", "Suggests Hammer of Justice before Judgement of Command for double damage on stunned players.")
+			"Stun burst combo (HoJ -> Judgement)", "Holds Judgement during Seal GCD and prioritizes HoJ -> JUDGE STUN! for double damage on players (with DR & overlap protection).")
 
-		self:AddCheckbox(pvpCat, "RetPulse_PvpCcBreaker", "pvpCcBreaker",
-			"CC breaker (Will of the Forsaken / Freedom)", "Suggests Will of the Forsaken when CC'd and Blessing of Freedom when slowed/rooted out of melee.")
+		self:AddCheckbox(pvpCat, "RetPulse_PvpAntiImmune", "pvpAntiImmune",
+			"Anti-immunity hold (Bubble / Ice Block)", "Freezes Burst, HoJ, and Judgement when your target shows IMMUNE! so cooldowns are never wasted.")
+
+		self:AddCheckbox(pvpCat, "RetPulse_PvpExecuteSnipe", "pvpExecuteSnipe",
+			"30yd Execute snipe & range bands", "Prioritizes Hammer of Wrath (FINISH!) up to 30yd and hides melee-only Holy Strike while kiting at 10-20yd.")
+
+		self:AddCheckbox(pvpCat, "RetPulse_PvpSmartMatchup", "pvpSmartMatchup",
+			"Smart matchup (Healer / Mage / Burst gate)", "Saves HoJ on Healers unless executing/bursting, catches Mage Blink with Repentance, and gates Burst to melee/stun windows.")
 
 		self:AddCheckbox(pvpCat, "RetPulse_PvpGapCloser", "pvpGapCloser",
 			"Gap closer & 2nd interrupt (Repentance)", "Uses Repentance at range to stop fleeing players or interrupt casts when Hammer of Justice is unavailable.")
 
 		self:AddCheckbox(pvpCat, "RetPulse_PvpAntiRunner", "pvpAntiRunner",
 			"Anti-runner (Seal of Justice)", "Swaps to Seal of Justice + Judgement when a mobile enemy player (Druid/Shaman/Hunter/Rogue) escapes melee.")
+
+		AddSection(pvpLayout, "360 Awareness & Survival")
+
+		self:AddCheckbox(pvpCat, "RetPulse_PvpCcBreaker", "pvpCcBreaker",
+			"CC breaker (WotF / Every Man / Freedom)", "Suggests Will of the Forsaken on Fear/Charm/Sleep, Every Man on hard CC, and Blessing of Freedom on roots/snares.")
+
+		self:AddCheckbox(pvpCat, "RetPulse_PvpDefensive", "pvpDefensive",
+			"Focused survival (PvP Trinket / Bubble)", "Uses equipped PvP Trinket on long hard CC and prompts Divine Shield / Divine Protection when focused by multiple attackers.")
+
+		self:AddCheckbox(pvpCat, "RetPulse_PvpOffTargetAlert", "pvpOffTargetAlert",
+			"Nearby enemy cast radar (OFF-KICK!)", "Alerts when another hostile player nameplate nearby casts an interruptible spell within HoJ or Repentance range.")
+
+		self:AddCheckbox(pvpCat, "RetPulse_PvpPeel", "pvpPeel",
+			"Teammate peel (HoJ / BoP on healer)", "Suggests Hammer of Justice or Blessing of Protection when your target is hitting a friendly healer or caster.")
+
+		self:AddCheckbox(pvpCat, "RetPulse_PvpAntiStealth", "pvpAntiStealth",
+			"Anti-stealth reflex (Consecration on Vanish)", "Briefly prompts Consecration if a Rogue or Druid vanishes right out of melee combat.")
 
 		-----------------------------------------------------------------------
 		-- Subcategory 2: Buffs & Talents

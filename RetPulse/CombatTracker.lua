@@ -17,6 +17,27 @@ local MAX_ECHOES = 3
 local ECHO_AURA_ID = 1310735
 local SEAL_DURATION = 30
 local MISS_WINDOW = 0.9
+local SafeBool = ns.SafeBool
+
+local function WallTime()
+	if time then return time() end
+	if os and os.time then return os.time() end
+	return math.floor(GetTime())
+end
+
+local function NormalizeUnitName(name)
+	if type(name) ~= "string" or ns.IsSecret(name) then return nil end
+	local stripped = name:gsub("%s*%(%*%)$", ""):gsub("%s*%-.+$", "")
+	if strtrim then
+		stripped = strtrim(stripped)
+	else
+		stripped = stripped:gsub("^%s+", ""):gsub("%s+$", "")
+	end
+	if stripped == "" or stripped == "Unknown" or (UNKNOWNOBJECT and stripped == UNKNOWNOBJECT) then
+		return nil
+	end
+	return stripped
+end
 
 CombatTracker.echoes = 0
 CombatTracker.activeSeal = nil
@@ -35,6 +56,27 @@ CombatTracker.swingKnown = false
 
 function CombatTracker:OnLogin()
 	self:Reset()
+	self.castBuffedByName = {}
+	self.castBuffedByGuid = {}
+	self.castBuffedByUnit = {}
+	self.castBuffedByClass = {}
+	self.buffSkipUntil = {}
+	self.lastSentBlessingTarget = nil
+	self.lastSentBlessingAt = nil
+	if ns.db and type(ns.db.lastOwnBlessing) == "table" then
+		local saved = ns.db.lastOwnBlessing
+		local rem = (type(saved.expiresAt) == "number") and (saved.expiresAt - WallTime()) or 0
+		if type(saved.name) == "string" and rem > 0 and rem <= 960 then
+			self.activeBlessings = self.activeBlessings or {}
+			self.ownBlessings = self.ownBlessings or {}
+			self.ownBlessingExpiry = self.ownBlessingExpiry or {}
+			self.activeBlessings[saved.name] = true
+			self.ownBlessings[saved.name] = true
+			self.ownBlessingExpiry[saved.name] = GetTime() + rem
+		else
+			ns.db.lastOwnBlessing = nil
+		end
+	end
 	local engine = ns:GetModule("WeaponEngine")
 	self.lastWeaponItemID = engine and engine.weaponItemID or nil
 
@@ -58,10 +100,54 @@ function CombatTracker:OnLogin()
 		if unit == "player" then self:RefreshSeal() end
 	end)
 
+	ns:On("UNIT_SPELLCAST_SENT", function(_, unit, targetName)
+		if unit == "player" and ns.IsReadable(targetName) and type(targetName) == "string" and targetName ~= "" then
+			self.lastSentBlessingTarget = NormalizeUnitName(targetName)
+			self.lastSentBlessingAt = GetTime()
+		end
+	end)
+
 	ns:On("UNIT_SPELLCAST_SUCCEEDED", function(_, unit, _, spellID)
 		if unit == "player" then
 			self.notFacingUntil = nil
 			self:OnSpellCast(spellID)
+		end
+	end)
+
+	ns:On("GROUP_ROSTER_UPDATE", function()
+		self.castBuffedByUnit = {}
+	end)
+
+	ns:On("PLAYER_ENTERING_WORLD", function()
+		self.castBuffedByName = {}
+		self.castBuffedByGuid = {}
+		self.castBuffedByUnit = {}
+		self.castBuffedByClass = {}
+		self.buffSkipUntil = {}
+		self.lastSuggestedBuffUnit = nil
+		self.lastSuggestedBuffGuid = nil
+		self.lastSuggestedBuffName = nil
+		self.lastSuggestedBuffSpell = nil
+		self.lastSuggestedBuffAt = nil
+		self.lastClickedBuffUnit = nil
+		self.lastClickedBuffGuid = nil
+		self.lastClickedBuffName = nil
+		self.lastClickedBuffSpell = nil
+		self.lastClickedBuffAt = nil
+		self.lastSentBlessingTarget = nil
+		self.lastSentBlessingAt = nil
+		self.aurasSecret = ns.AreAurasSecret and ns.AreAurasSecret() or false
+		if self.aurasSecret or self:IsInBattleground() then
+			if not self:HasValidOwnBlessing() then
+				self.needsBlessingAfterDeath = true
+			end
+			local hasAuraForm = GetShapeshiftForm and (SafeBool(GetShapeshiftForm) == true or (function()
+				local okF, f = pcall(GetShapeshiftForm)
+				return okF and ns.IsReadable(f) and type(f) == "number" and f > 0
+			end)())
+			if not self.hasOwnAura and not hasAuraForm then
+				self.needsAuraAfterDeath = true
+			end
 		end
 	end)
 
@@ -123,9 +209,29 @@ function CombatTracker:OnLogin()
 	end)
 
 	ns:On("UI_ERROR_MESSAGE", function(_, _, message)
-		if ns.db and ns.db.facingAlert == false then return end
 		if type(message) ~= "string" or ns.IsSecret(message) then return end
 		local lower = message:lower()
+
+		if not InCombatLockdown() and self.lastSuggestedBuffUnit and (GetTime() - (self.lastSuggestedBuffAt or 0)) <= 2.0 then
+			local isBuffFail = lower:find("out of range", 1, true) ~= nil
+				or lower:find("line of sight", 1, true) ~= nil
+				or lower:find("dead", 1, true) ~= nil
+				or lower:find("invalid target", 1, true) ~= nil
+				or lower:find("too far", 1, true) ~= nil
+			if isBuffFail then
+				self.buffSkipUntil = self.buffSkipUntil or {}
+				local untilAt = GetTime() + 10.0
+				if self.lastSuggestedBuffGuid then self.buffSkipUntil[self.lastSuggestedBuffGuid] = untilAt end
+				if self.lastSuggestedBuffName then self.buffSkipUntil[self.lastSuggestedBuffName] = untilAt end
+				self.buffSkipUntil[self.lastSuggestedBuffUnit] = untilAt
+				self.lastSuggestedBuffUnit = nil
+				self.lastSuggestedBuffGuid = nil
+				self.lastSuggestedBuffName = nil
+				self.lastSuggestedBuffSpell = nil
+			end
+		end
+
+		if ns.db and ns.db.facingAlert == false then return end
 		local isFacingErr = (ERR_ATTACK_FACING and message == ERR_ATTACK_FACING)
 			or (SPELL_FAILED_UNIT_NOT_INFRONT and message == SPELL_FAILED_UNIT_NOT_INFRONT)
 			or lower:find("facing", 1, true) ~= nil
@@ -180,6 +286,20 @@ function CombatTracker:OnLogin()
 			self.activeNameplates[unit] = nil
 			self.meleeEnemyCountAt = nil
 		end
+	end)
+
+	ns:On("PLAYER_DEAD", function()
+		self.activeBlessings = {}
+		self.ownBlessings = {}
+		self.ownBlessingExpiry = {}
+		self.activeAuras = {}
+		self.hasOwnAura = false
+		self.activeSeal = nil
+		self.activeSealID = nil
+		self.sealExpiresAt = nil
+		self.needsBlessingAfterDeath = true
+		self.needsAuraAfterDeath = true
+		if ns.db then ns.db.lastOwnBlessing = nil end
 	end)
 
 	self:RefreshSeal()
@@ -326,17 +446,53 @@ end
 -------------------------------------------------------------------------------
 -- Active seal
 -------------------------------------------------------------------------------
+local NON_STAT_BLESSINGS = {
+	["Blessing of Freedom"] = true,
+	["Blessing of Protection"] = true,
+	["Blessing of Sacrifice"] = true,
+	["Blessing of Salvation"] = true,
+}
+
+local function IsAuraFromPlayer(aura)
+	if type(aura) ~= "table" then return false, true end
+	local okS, src = pcall(function() return aura.sourceUnit end)
+	if okS and type(src) == "string" and not ns.IsSecret(src) then
+		if src == "player" or src == "pet" then
+			return true, false
+		end
+		if UnitIsUnit then
+			local okU, same = pcall(UnitIsUnit, src, "player")
+			if okU and ns.IsReadable(same) then
+				return same == true, false
+			end
+		else
+			return false, false
+		end
+	end
+	local okP, fromFlag = pcall(function() return aura.isFromPlayerOrPlayerPet end)
+	if okP and ns.IsReadable(fromFlag) and type(fromFlag) == "boolean" then
+		return fromFlag and true or false, false
+	end
+	return false, true
+end
+
 function CombatTracker:RefreshSeal()
 	if InCombatLockdown() then
-		-- Auras are unreadable while tainted in combat; cast tracking covers this.
+		-- Auras are unreadable while tainted in combat; preserve cast-tracked state.
+		return
+	end
+	if ns.AreAurasSecret and ns.AreAurasSecret() then
+		-- Inside Battlegrounds auras stay secret even out of combat; keep cast-tracked state.
+		self.aurasSecret = true
 		return
 	end
 	if not C_UnitAuras or not C_UnitAuras.GetAuraDataByIndex then return end
 
 	-- Rank-proof: the buff's spell ID changes per rank, its name does not.
-	-- In combat the client may hand back secret aura data; then this scan proves
+	-- If any aura entry errors or returns secret data, this scan proves
 	-- nothing and must not wipe what the cast tracker already knows.
 	local sawReadable = false
+	local sawSecret = false
 	local foundSeal = false
 	local scanComplete = false
 	local foundOwnAura = false
@@ -347,67 +503,147 @@ function CombatTracker:RefreshSeal()
 	local foundOwnBlessingExpiry = {}
 	for i = 1, 40 do
 		local ok, aura = pcall(C_UnitAuras.GetAuraDataByIndex, "player", i, "HELPFUL")
-		if not ok then break end
+		if not ok then
+			sawSecret = true
+			break
+		end
 		if not aura then
 			-- A clean, readable end of the list (even an empty one) proves the
 			-- player has no further buffs, so a cancelled seal can be cleared.
 			scanComplete = true
 			break
 		end
-
-		local name = aura.name
-		if name ~= nil and not ns.IsSecret(name) then
-			sawReadable = true
-			local src = aura.sourceUnit
-			local fromPlayer = (src ~= nil and not ns.IsSecret(src) and src == "player")
-			if name == ns.SPELLS.RIGHTEOUS_FURY then
-				foundRighteousFury = true
-			elseif self:IsBlessingName(name) then
-				foundBlessings[name] = true
-				if fromPlayer then
-					foundOwnBlessings[name] = true
-					local expiry = aura.expirationTime
-					if ns.IsReadable(expiry) and type(expiry) == "number" and expiry > 0 then
-						foundOwnBlessingExpiry[name] = expiry
+		if ns.IsSecret(aura) then
+			sawSecret = true
+		else
+			local okN, name = pcall(function() return aura.name end)
+			if not okN then
+				sawSecret = true
+			elseif name ~= nil and not ns.IsSecret(name) then
+				sawReadable = true
+				local fromPlayer, sourceUnknown = IsAuraFromPlayer(aura)
+				if name == ns.SPELLS.RIGHTEOUS_FURY then
+					foundRighteousFury = true
+				elseif self:IsStatBlessingName(name) then
+					foundBlessings[name] = true
+					if fromPlayer or sourceUnknown then
+						foundOwnBlessings[name] = true
+						local okE, expiry = pcall(function() return aura.expirationTime end)
+						if okE and ns.IsReadable(expiry) and type(expiry) == "number" and expiry > 0 then
+							foundOwnBlessingExpiry[name] = expiry
+						end
+					end
+				elseif self:IsAuraName(name) then
+					foundAuras[name] = true
+					if fromPlayer then foundOwnAura = true end
+				elseif not foundSeal and self:IsSealName(name) then
+					foundSeal = true
+					self.activeSeal = name
+					self.activeSealID = aura.spellId
+					self.seenSeals[name] = true
+					local okE, expiry = pcall(function() return aura.expirationTime end)
+					if okE and ns.IsReadable(expiry) and expiry > GetTime() then
+						self.sealExpiresAt = expiry
+					else
+						-- Auras may report 0 for "no expiration"; never treat that as expired.
+						self.sealExpiresAt = GetTime() + SEAL_DURATION
 					end
 				end
-			elseif self:IsAuraName(name) then
-				foundAuras[name] = true
-				if fromPlayer then foundOwnAura = true end
-			elseif not foundSeal and self:IsSealName(name) then
-				foundSeal = true
-				self.activeSeal = name
-				self.activeSealID = aura.spellId
-				self.seenSeals[name] = true
-				local expiry = aura.expirationTime
-				if ns.IsReadable(expiry) and expiry > GetTime() then
-					self.sealExpiresAt = expiry
-				else
-					-- Auras may report 0 for "no expiration"; never treat that as expired.
-					self.sealExpiresAt = GetTime() + SEAL_DURATION
-				end
+			elseif name ~= nil and ns.IsSecret(name) then
+				sawSecret = true
 			end
 		end
 	end
 
-	-- Out of combat we scanned the full player buff list: update blessings & aura state.
-	if not InCombatLockdown() then
+	-- Out of combat when auras are readable: update blessings & aura state.
+	-- If secret/errored (e.g. inside a Battleground), keep cast-tracked state intact.
+	if not InCombatLockdown() and not sawSecret and (sawReadable or scanComplete) then
+		self.aurasSecret = false
 		self.activeBlessings = foundBlessings
 		self.ownBlessings = foundOwnBlessings
 		self.ownBlessingExpiry = foundOwnBlessingExpiry
 		self.activeAuras = foundAuras
 		self.hasOwnAura = foundOwnAura
 		self.hasRighteousFury = foundRighteousFury
-		if not foundSeal and (sawReadable or scanComplete) then
+		if next(foundOwnBlessings) ~= nil then
+			self.needsBlessingAfterDeath = false
+			if ns.db then
+				for bName in pairs(foundOwnBlessings) do
+					local exp = foundOwnBlessingExpiry[bName]
+					local rem = (type(exp) == "number" and exp > GetTime()) and (exp - GetTime()) or 300
+					ns.db.lastOwnBlessing = { name = bName, expiresAt = WallTime() + rem }
+					break
+				end
+			end
+		elseif ns.db then
+			ns.db.lastOwnBlessing = nil
+		end
+		if foundOwnAura then
+			self.needsAuraAfterDeath = false
+		end
+		if not foundSeal then
 			self.activeSeal = nil
 			self.activeSealID = nil
 			self.sealExpiresAt = nil
 		end
+	elseif sawSecret then
+		self.aurasSecret = true
 	end
 end
 
--- Cast tracking is the in-combat fallback: cast events and spell IDs stay
--- readable even when aura names are secret.
+-- Cast tracking is the in-combat (and Battleground secret-aura) fallback:
+-- cast events and spell IDs stay readable even when aura names are secret.
+function CombatTracker:ResolveClassForTargetName(targetNorm)
+	if not targetNorm or not UnitClass then return nil end
+	local pNorm = UnitName and NormalizeUnitName(UnitName("player")) or nil
+	if pNorm and targetNorm == pNorm then
+		local okC, _, token = pcall(UnitClass, "player")
+		return okC and ns.IsReadable(token) and token or nil
+	end
+	if SafeBool(UnitExists, "target") == true and UnitName then
+		local tNorm = NormalizeUnitName(UnitName("target"))
+		if tNorm == targetNorm then
+			local okC, _, token = pcall(UnitClass, "target")
+			if okC and ns.IsReadable(token) then return token end
+		end
+	end
+	if SafeBool(IsInGroup) == true and UnitName then
+		local inRaid = SafeBool(IsInRaid) == true
+		local total = GetNumGroupMembers and GetNumGroupMembers() or 0
+		local prefix = inRaid and "raid" or "party"
+		local maxUnits = inRaid and math.min(total, 40) or math.min(total, 4)
+		for idx = 1, maxUnits do
+			local u = prefix .. idx
+			if SafeBool(UnitExists, u) == true then
+				local uNorm = NormalizeUnitName(UnitName(u))
+				if uNorm == targetNorm then
+					local okC, _, token = pcall(UnitClass, u)
+					if okC and ns.IsReadable(token) then return token end
+				end
+			end
+		end
+	end
+	return nil
+end
+
+function CombatTracker:NoteBuffClick(unit, unitName, spellName)
+	self.lastClickedBuffUnit = unit
+	if unit == "player" and UnitName then
+		self.lastClickedBuffName = NormalizeUnitName(UnitName("player"))
+	else
+		self.lastClickedBuffName = NormalizeUnitName(unitName)
+	end
+	self.lastClickedBuffSpell = spellName
+	self.lastClickedBuffAt = GetTime()
+	self.lastClickedBuffGuid = nil
+	if unit and UnitGUID then
+		local okG, g = pcall(UnitGUID, unit)
+		if okG and ns.IsReadable(g) and g ~= "" then
+			self.lastClickedBuffGuid = g
+		end
+	end
+end
+
 function CombatTracker:OnSpellCast(spellID)
 	local name = ns.GetSpellNameByID(spellID)
 	if not name then return end
@@ -415,11 +651,161 @@ function CombatTracker:OnSpellCast(spellID)
 	if name == ns.SPELLS.JUDGEMENT and self:GetActiveSeal() == ns.SPELLS.SEAL_CRUSADER then
 		self.judgedCrusader = true
 	end
-	if self:IsBlessingName(name) then
-		self.activeBlessings = self.activeBlessings or {}
-		self.ownBlessings = self.ownBlessings or {}
-		self.activeBlessings[name] = true
-		self.ownBlessings[name] = true
+	if name == ns.SPELLS.BLESSING_FREEDOM or name == ns.SPELLS.BLESSING_PROTECTION then
+		local now = GetTime()
+		local sentTarget = (self.lastSentBlessingTarget and (now - (self.lastSentBlessingAt or 0)) <= 2.0) and self.lastSentBlessingTarget or nil
+		local playerNorm = UnitName and NormalizeUnitName(UnitName("player")) or nil
+		local clickedTeammate = self.lastClickedBuffUnit and self.lastClickedBuffUnit ~= "player" and self.lastClickedBuffSpell == name
+			and (now - (self.lastClickedBuffAt or 0)) <= 2.5
+		local targetFriend = (not sentTarget) and SafeBool(UnitExists, "target") == true and SafeBool(UnitIsFriend, "player", "target") == true
+			and SafeBool(UnitIsUnit, "target", "player") == false
+		local onSelf = (not clickedTeammate) and (not targetFriend) and (not sentTarget or (playerNorm and sentTarget == playerNorm))
+		if onSelf then
+			if self.activeBlessings and self.ownBlessings then
+				for bName in pairs(self.ownBlessings) do
+					self.activeBlessings[bName] = nil
+				end
+			end
+			self.ownBlessings = {}
+			self.ownBlessingExpiry = {}
+			self.needsBlessingAfterDeath = true
+			if ns.db then ns.db.lastOwnBlessing = nil end
+		end
+		return
+	end
+	if self:IsStatBlessingName(name) then
+		local now = GetTime()
+		local dur = name:find("^Greater ") and 900 or 300
+		local exp = now + dur
+
+		local targetNorm, targetGuid, targetUnit, via
+		if self.lastSentBlessingTarget and (now - (self.lastSentBlessingAt or 0)) <= 2.0 then
+			targetNorm = self.lastSentBlessingTarget
+			self.lastSentBlessingTarget = nil
+			self.lastSentBlessingAt = nil
+			via = "sent"
+		else
+			self.lastSentBlessingTarget = nil
+			self.lastSentBlessingAt = nil
+		end
+
+		if self.lastClickedBuffUnit and self.lastClickedBuffSpell == name
+			and (now - (self.lastClickedBuffAt or 0)) <= 2.5 then
+			targetUnit = self.lastClickedBuffUnit
+			targetGuid = self.lastClickedBuffGuid
+			targetNorm = targetNorm or self.lastClickedBuffName
+			self.lastClickedBuffUnit = nil
+			self.lastClickedBuffGuid = nil
+			self.lastClickedBuffName = nil
+			self.lastClickedBuffSpell = nil
+			via = via and ("click+" .. via) or "click"
+		elseif self.lastSuggestedBuffUnit and self.lastSuggestedBuffSpell == name
+			and (now - (self.lastSuggestedBuffAt or 0)) <= 4.0 then
+			if not targetNorm or targetNorm == self.lastSuggestedBuffName then
+				targetNorm = targetNorm or self.lastSuggestedBuffName
+				targetGuid = self.lastSuggestedBuffGuid
+				targetUnit = self.lastSuggestedBuffUnit
+				via = via or "suggested"
+			end
+		end
+
+		if targetNorm and not targetUnit and SafeBool(IsInGroup) == true and UnitName then
+			local inRaid = SafeBool(IsInRaid) == true
+			local total = GetNumGroupMembers and GetNumGroupMembers() or 0
+			local prefix = inRaid and "raid" or "party"
+			local maxUnits = inRaid and math.min(total, 40) or math.min(total, 4)
+			for idx = 1, maxUnits do
+				local u = prefix .. idx
+				if SafeBool(UnitExists, u) == true then
+					local uNorm = NormalizeUnitName(UnitName(u))
+					if uNorm and uNorm == targetNorm then
+						targetUnit = u
+						if UnitGUID then
+							local okG, g = pcall(UnitGUID, u)
+							if okG and ns.IsReadable(g) and g ~= "" then targetGuid = g end
+						end
+						break
+					end
+				end
+			end
+		end
+
+		if not targetNorm and not targetUnit and SafeBool(UnitExists, "target") == true and SafeBool(UnitIsFriend, "player", "target") == true then
+			if UnitName then targetNorm = NormalizeUnitName(UnitName("target")) end
+			if UnitGUID then
+				local okG, g = pcall(UnitGUID, "target")
+				if okG and ns.IsReadable(g) and g ~= "" then targetGuid = g end
+			end
+			targetUnit = "target"
+			via = "target"
+		elseif not targetNorm and not targetUnit and UnitName then
+			targetNorm = NormalizeUnitName(UnitName("player"))
+			if UnitGUID then
+				local okG, g = pcall(UnitGUID, "player")
+				if okG and ns.IsReadable(g) and g ~= "" then targetGuid = g end
+			end
+			via = "self"
+		end
+
+		self.castBuffedByName = self.castBuffedByName or {}
+		self.castBuffedByGuid = self.castBuffedByGuid or {}
+		self.castBuffedByUnit = self.castBuffedByUnit or {}
+		self.castBuffedByClass = self.castBuffedByClass or {}
+		if targetNorm then self.castBuffedByName[targetNorm] = exp end
+		if targetGuid then self.castBuffedByGuid[targetGuid] = exp end
+		if targetUnit then self.castBuffedByUnit[targetUnit] = exp end
+
+		if self.lastSuggestedBuffUnit and ((targetUnit and targetUnit == self.lastSuggestedBuffUnit)
+			or (targetGuid and targetGuid == self.lastSuggestedBuffGuid)
+			or (targetNorm and targetNorm == self.lastSuggestedBuffName)) then
+			self.lastSuggestedBuffUnit = nil
+			self.lastSuggestedBuffGuid = nil
+			self.lastSuggestedBuffName = nil
+			self.lastSuggestedBuffSpell = nil
+		end
+
+		local trace = ns:GetModule("Trace")
+		if trace and trace.enabled and trace.Record then
+			trace:Record("BUFFCAST",
+				"spell=" .. tostring(name),
+				"unit=" .. tostring(targetUnit),
+				"name=" .. tostring(targetNorm),
+				"via=" .. tostring(via))
+		end
+
+		local classToken
+		if name:find("^Greater ") then
+			classToken = self:ResolveClassForTargetName(targetNorm)
+			if classToken then
+				self.castBuffedByClass[classToken] = exp
+			end
+		end
+
+		local playerNorm = UnitName and NormalizeUnitName(UnitName("player")) or nil
+		local onSelf = (not targetNorm and not targetUnit)
+			or (targetUnit == "player")
+			or (targetUnit and SafeBool(UnitIsUnit, targetUnit, "player") == true)
+			or (playerNorm and targetNorm == playerNorm)
+			or (classToken == "PALADIN")
+		if onSelf then
+			self.activeBlessings = self.activeBlessings or {}
+			self.ownBlessings = self.ownBlessings or {}
+			self.ownBlessingExpiry = self.ownBlessingExpiry or {}
+			self.activeBlessings[name] = true
+			self.ownBlessings[name] = true
+			self.ownBlessingExpiry[name] = exp
+			self.needsBlessingAfterDeath = false
+			if ns.db then
+				ns.db.lastOwnBlessing = { name = name, expiresAt = WallTime() + dur }
+			end
+		end
+		return
+	end
+	if self:IsAuraName(name) then
+		self.activeAuras = self.activeAuras or {}
+		self.activeAuras[name] = true
+		self.hasOwnAura = true
+		self.needsAuraAfterDeath = false
 		return
 	end
 	if not self:IsSealName(name) then return end
@@ -445,6 +831,11 @@ end
 
 function CombatTracker:IsBlessingName(name)
 	return type(name) == "string" and (name:find("^Blessing of ") ~= nil or name:find("^Greater Blessing of ") ~= nil)
+end
+
+function CombatTracker:IsStatBlessingName(name)
+	if not self:IsBlessingName(name) then return false end
+	return not NON_STAT_BLESSINGS[name]
 end
 
 function CombatTracker:IsAuraName(name)
@@ -474,9 +865,31 @@ function CombatTracker:ResolveBlessingSpell(baseSpell)
 	return baseSpell
 end
 
+function CombatTracker:HasValidOwnBlessing()
+	local own = self.ownBlessings
+	if not own then return false end
+	local ownExpiry = self.ownBlessingExpiry or {}
+	local now = GetTime()
+	for bName in pairs(own) do
+		local exp = ownExpiry[bName]
+		if (not exp or exp > now) and not IsBuffExpiringSoon(exp) then
+			return true
+		end
+	end
+	return false
+end
+
 function CombatTracker:GetMissingBlessing()
 	if InCombatLockdown() then return nil end
 	if UnitIsDeadOrGhost and UnitIsDeadOrGhost("player") then return nil end
+	local aurasSecret = (ns.AreAurasSecret and ns.AreAurasSecret()) or self.aurasSecret
+	if aurasSecret and not self.needsBlessingAfterDeath then
+		-- When auras are secret, still allow reminding if our own cast-tracked
+		-- Blessing has expired or is expiring soon (< 60s).
+		if not self.ownBlessings or next(self.ownBlessings) == nil or self:HasValidOwnBlessing() then
+			return nil
+		end
+	end
 
 	local pref = (ns.db and ns.db.preferredBlessing) or "auto"
 	if pref == "off" then return nil end
@@ -565,32 +978,107 @@ local function BlessingOrderForUnit(unit)
 end
 
 function CombatTracker:FindMissingBlessingForUnit(unit)
-	local exists = UnitExists and UnitExists(unit)
-	local connected = (not UnitIsConnected) or UnitIsConnected(unit)
-	local dead = UnitIsDeadOrGhost and UnitIsDeadOrGhost(unit)
-	local isSelf = UnitIsUnit and UnitIsUnit(unit, "player")
-	if not (exists and connected and not dead and not isSelf) then
+	local exists = SafeBool(UnitExists, unit) == true
+	local connected = (not UnitIsConnected) or (SafeBool(UnitIsConnected, unit) == true)
+	local isSelf = SafeBool(UnitIsUnit, unit, "player") == true
+	if not (exists and connected and not isSelf) then
 		return nil
+	end
+	if UnitIsVisible and SafeBool(UnitIsVisible, unit) ~= true then
+		return nil
+	end
+	if UnitInPhase and SafeBool(UnitInPhase, unit) == false then
+		return nil
+	end
+
+	local rawName
+	if UnitName then
+		local okN, n = pcall(UnitName, unit)
+		if okN and ns.IsReadable(n) and n ~= "" then
+			rawName = n
+		end
+	end
+	local unitNorm = NormalizeUnitName(rawName)
+
+	local unitGuid
+	if UnitGUID then
+		local okG, g = pcall(UnitGUID, unit)
+		if okG and ns.IsReadable(g) and g ~= "" then
+			unitGuid = g
+		end
+	end
+
+	local dead = (UnitIsDeadOrGhost and SafeBool(UnitIsDeadOrGhost, unit) ~= false)
+		or (UnitIsDead and SafeBool(UnitIsDead, unit) ~= false)
+		or (UnitIsGhost and SafeBool(UnitIsGhost, unit) ~= false)
+		or false
+	if dead then
+		if unitNorm and self.castBuffedByName then self.castBuffedByName[unitNorm] = nil end
+		if unitGuid and self.castBuffedByGuid then self.castBuffedByGuid[unitGuid] = nil end
+		if self.castBuffedByUnit then self.castBuffedByUnit[unit] = nil end
+		return nil
+	end
+
+	local now = GetTime()
+	if self.buffSkipUntil then
+		local skipAt = (unitGuid and self.buffSkipUntil[unitGuid])
+			or (unitNorm and self.buffSkipUntil[unitNorm])
+			or self.buffSkipUntil[unit]
+		if skipAt and now < skipAt then
+			return nil
+		end
 	end
 
 	local hasOwn = false
 	local active = {}
-	for i = 1, 40 do
-		local ok, aura = pcall(C_UnitAuras.GetAuraDataByIndex, unit, i, "HELPFUL")
-		if not ok or not aura then break end
-		local name = aura.name
-		if name ~= nil and not ns.IsSecret(name) and self:IsBlessingName(name) then
-			local src = aura.sourceUnit
-			local fromPlayer = (src ~= nil and not ns.IsSecret(src) and src == "player")
-			if fromPlayer then
-				if IsBuffExpiringSoon(aura.expirationTime) then
-					-- Expiring own blessing: allow re-buffing instead of treating as covered.
-				else
-					hasOwn = true
-					break
+	local aurasSecret = (ns.AreAurasSecret and ns.AreAurasSecret()) or self.aurasSecret
+
+	local nameExp = unitNorm and self.castBuffedByName and self.castBuffedByName[unitNorm] or nil
+	local guidExp = unitGuid and self.castBuffedByGuid and self.castBuffedByGuid[unitGuid] or nil
+	local unitExp = self.castBuffedByUnit and self.castBuffedByUnit[unit] or nil
+	local classExp
+	if UnitClass and self.castBuffedByClass then
+		local okC, _, classToken = pcall(UnitClass, unit)
+		if okC and ns.IsReadable(classToken) then
+			classExp = self.castBuffedByClass[classToken]
+		end
+	end
+	local bestCastExp = math.max(nameExp or 0, guidExp or 0, unitExp or 0, classExp or 0)
+
+	if aurasSecret then
+		if bestCastExp > now and not IsBuffExpiringSoon(bestCastExp) then
+			hasOwn = true
+		end
+	else
+		if (bestCastExp - now) > 290 then
+			hasOwn = true
+		end
+		if not hasOwn then
+			if not C_UnitAuras or not C_UnitAuras.GetAuraDataByIndex then return nil end
+			for i = 1, 40 do
+				local ok, aura = pcall(C_UnitAuras.GetAuraDataByIndex, unit, i, "HELPFUL")
+				if not ok then return nil end
+				if not aura then break end
+				if ns.IsSecret(aura) then return nil end
+				local okN, name = pcall(function() return aura.name end)
+				if not okN or ns.IsSecret(name) then return nil end
+				if name ~= nil and self:IsStatBlessingName(name) then
+					local fromPlayer, sourceUnknown = IsAuraFromPlayer(aura)
+					if fromPlayer then
+						local okE, exp = pcall(function() return aura.expirationTime end)
+						if IsBuffExpiringSoon(okE and exp or nil) then
+							-- Expiring own blessing: allow re-buffing instead of treating as covered.
+						else
+							hasOwn = true
+							break
+						end
+					elseif sourceUnknown and self:IsInBattleground() then
+						hasOwn = true
+						break
+					else
+						active[name] = true
+					end
 				end
-			else
-				active[name] = true
 			end
 		end
 	end
@@ -600,18 +1088,35 @@ function CombatTracker:FindMissingBlessingForUnit(unit)
 	for _, spellName in ipairs(BlessingOrderForUnit(unit)) do
 		if IsSpellKnownByName(spellName) and not active[spellName] and not active["Greater " .. spellName] then
 			local resolved = self:ResolveBlessingSpell(spellName)
-			local inRange = true
+			local inRange = false
+			local rangeKnown = false
 			if C_Spell and C_Spell.IsSpellInRange then
 				local okR, r = pcall(C_Spell.IsSpellInRange, resolved, unit)
-				if okR and ns.IsReadable(r) and r == false then
-					inRange = false
+				if okR and ns.IsReadable(r) then
+					inRange = (r == true)
+					rangeKnown = true
+				end
+			end
+			if not rangeKnown and CheckInteractDistance then
+				local close = SafeBool(CheckInteractDistance, unit, 4)
+				if close ~= nil then
+					inRange = close
+					rangeKnown = true
+				end
+			end
+			if not rangeKnown and UnitInRange then
+				local okU, rU, checkedU = pcall(UnitInRange, unit)
+				if okU and ns.IsReadable(checkedU) and checkedU == true and ns.IsReadable(rU) then
+					inRange = (rU == true)
 				end
 			end
 			if inRange then
-				local okN, unitName = pcall(UnitName, unit)
-				if not okN or not ns.IsReadable(unitName) or unitName == "" then
-					unitName = unit
-				end
+				local unitName = rawName or unit
+				self.lastSuggestedBuffUnit = unit
+				self.lastSuggestedBuffGuid = unitGuid
+				self.lastSuggestedBuffName = unitNorm
+				self.lastSuggestedBuffSpell = resolved
+				self.lastSuggestedBuffAt = now
 				return resolved, unit, unitName
 			end
 			break
@@ -623,23 +1128,21 @@ end
 function CombatTracker:GetMissingTargetBlessing()
 	if InCombatLockdown() then return nil end
 	if ns.db and ns.db.remindGroupBlessings == false then return nil end
-	if UnitIsDeadOrGhost and UnitIsDeadOrGhost("player") then return nil end
-	if not C_UnitAuras or not C_UnitAuras.GetAuraDataByIndex then return nil end
-	if not UnitExists or not UnitExists("target") then return nil end
-	if UnitIsPlayer and not UnitIsPlayer("target") then return nil end
-	if UnitCanAttack and UnitCanAttack("player", "target") then return nil end
-	if UnitIsFriend and not UnitIsFriend("player", "target") then return nil end
+	if UnitIsDeadOrGhost and SafeBool(UnitIsDeadOrGhost, "player") ~= false then return nil end
+	if SafeBool(UnitExists, "target") ~= true then return nil end
+	if UnitIsPlayer and SafeBool(UnitIsPlayer, "target") ~= true then return nil end
+	if UnitCanAttack and SafeBool(UnitCanAttack, "player", "target") ~= false then return nil end
+	if UnitIsFriend and SafeBool(UnitIsFriend, "player", "target") ~= true then return nil end
 	return self:FindMissingBlessingForUnit("target")
 end
 
 function CombatTracker:GetMissingGroupBlessing()
 	if InCombatLockdown() then return nil end
 	if ns.db and ns.db.remindGroupBlessings == false then return nil end
-	if UnitIsDeadOrGhost and UnitIsDeadOrGhost("player") then return nil end
-	if not C_UnitAuras or not C_UnitAuras.GetAuraDataByIndex then return nil end
-	if not IsInGroup or not IsInGroup() then return nil end
+	if UnitIsDeadOrGhost and SafeBool(UnitIsDeadOrGhost, "player") ~= false then return nil end
+	if SafeBool(IsInGroup) ~= true then return nil end
 
-	local inRaid = IsInRaid and IsInRaid() or false
+	local inRaid = SafeBool(IsInRaid) == true
 	local total = GetNumGroupMembers and GetNumGroupMembers() or 0
 	local prefix = inRaid and "raid" or "party"
 	local maxUnits = inRaid and math.min(total, 40) or math.min(total, 4)
@@ -688,6 +1191,7 @@ end
 
 function CombatTracker:GetMissingDispel()
 	if InCombatLockdown() then return nil end
+	if ns.AreAurasSecret and ns.AreAurasSecret() then return nil end
 	if ns.db and ns.db.remindDispel == false then return nil end
 	if UnitIsDeadOrGhost and UnitIsDeadOrGhost("player") then return nil end
 	if not C_UnitAuras or not C_UnitAuras.GetAuraDataByIndex then return nil end
@@ -730,6 +1234,7 @@ end
 
 function CombatTracker:GetThreatBuffWarning()
 	if InCombatLockdown() then return nil end
+	if ns.AreAurasSecret and ns.AreAurasSecret() then return nil end
 	if ns.db and ns.db.warnRighteousFury == false then return nil end
 	if not (IsInGroup and IsInGroup()) then return nil end
 	if not self.hasRighteousFury then return nil end
@@ -753,6 +1258,9 @@ function CombatTracker:GetMissingAura()
 		if okF and ns.IsReadable(form) and type(form) == "number" and form > 0 then
 			return nil
 		end
+	end
+	if ((ns.AreAurasSecret and ns.AreAurasSecret()) or self.aurasSecret) and not self.needsAuraAfterDeath then
+		return nil
 	end
 
 	local activeAuras = self.activeAuras or {}
@@ -1132,12 +1640,7 @@ function CombatTracker:IsSpellGlowing(name)
 	return false
 end
 
-function CombatTracker:GetMeleeEnemyCount()
-	local now = GetTime()
-	if self.meleeEnemyCount ~= nil and self.meleeEnemyCountAt and (now - self.meleeEnemyCountAt) < 0.2 then
-		return self.meleeEnemyCount
-	end
-
+function CombatTracker:GetActiveNameplateUnits()
 	local units = {}
 	if self.activeNameplates then
 		for unit in pairs(self.activeNameplates) do
@@ -1166,6 +1669,16 @@ function CombatTracker:GetMeleeEnemyCount()
 			end
 		end
 	end
+	return units
+end
+
+function CombatTracker:GetMeleeEnemyCount()
+	local now = GetTime()
+	if self.meleeEnemyCount ~= nil and self.meleeEnemyCountAt and (now - self.meleeEnemyCountAt) < 0.2 then
+		return self.meleeEnemyCount
+	end
+
+	local units = self:GetActiveNameplateUnits()
 
 	local count = 0
 	for unit in pairs(units) do

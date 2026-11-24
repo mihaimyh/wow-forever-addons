@@ -2,6 +2,18 @@
 
 All notable changes to **RetPulse** for **World of Warcraft: Forever (Interface 16001)** are documented in this file.
 
+## [2.1.0] - 2026-11-25
+
+### Added
+- **PvP Engine expansion** (`PvPEngine.lua` + new Settings toggles): anti-immunity hold (`IMMUNE!`), 30yd execute snipe (`FINISH!`), smart matchup (Healer / Mage / Burst gate), focused survival (`TRINKET!` / `BUBBLE!` / `DEFENSIVE!`), off-target cast radar (`OFF-KICK!`), teammate peel (`PEEL!` / BoP), and anti-stealth Consecration (`UNSTEALTH!`).
+- **Battleground buff reliability**: cast-tracked teammate blessings when auras are secret, self-buff click-to-cast, skip dead/out-of-range/failed buff targets, and persist own blessing across `/reload`.
+- **Weapon speed cache**: persists readable `UnitAttackSpeed` per weapon item ID so BG reloads keep the correct swing model when speed turns secret.
+
+### Fixed
+- **STUN COMBO! GCD preview**: while holding Judgement after Seal of Command, the HUD now previews `Hammer of Justice` (waiting on GCD) with `NEXT = Judgement` instead of briefly flashing `Holy Strike`.
+- **Secret-safe combat reads**: boolean/unit helpers and BG cooldown fallbacks no longer taint or throw when Forever returns secret values inside Battlegrounds.
+- **Range propagation**: out-of-range abilities keep `currentInRange = false` (never coerced to `nil`), so the HUD range tint stays accurate live.
+
 ## [2.0.0] - 2026-11-24
 
 ### Added

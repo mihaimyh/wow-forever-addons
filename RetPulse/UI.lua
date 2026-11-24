@@ -113,9 +113,13 @@ function UI:OnLogin()
 	end)
 	ns:On("PLAYER_REGEN_ENABLED", function()
 		self.combatFlag = false
+		self.consecutiveErrors = 0
 		self:Refresh()
 	end)
-	ns:On("PLAYER_TARGET_CHANGED", function() self:Refresh() end)
+	ns:On("PLAYER_TARGET_CHANGED", function()
+		self.consecutiveErrors = 0
+		self:Refresh()
+	end)
 	ns:On("NAME_PLATE_UNIT_ADDED", function()
 		if ns.db and ns.db.nameplateMode then self:Refresh() end
 	end)
@@ -126,6 +130,9 @@ function UI:OnLogin()
 		if unit == "player" then self:UpdateManaBar() end
 	end)
 	ns:On("UNIT_AURA", function(_, unit)
+		if unit == "player" and not InCombatLockdown() then self:Refresh() end
+	end)
+	ns:On("UNIT_SPELLCAST_SUCCEEDED", function(_, unit)
 		if unit == "player" and not InCombatLockdown() then self:Refresh() end
 	end)
 	ns:On("PLAYER_ENTERING_WORLD", function()
@@ -633,6 +640,15 @@ function UI:BuildClickCast(frame, main, cooldown)
 		frame:StopMovingOrSizing()
 		UI:SavePosition()
 	end)
+	btn:HookScript("PreClick", function()
+		if InCombatLockdown() then return end
+		if UI.clickSpell and UI.clickUnit then
+			local tracker = ns:GetModule("CombatTracker")
+			if tracker and tracker.NoteBuffClick then
+				tracker:NoteBuffClick(UI.clickUnit, UI.clickUnitName, UI.clickSpell)
+			end
+		end
+	end)
 	btn:HookScript("OnEnter", function(b)
 		if not UI.clickSpell or not GameTooltip then return end
 		GameTooltip:SetOwner(b, "ANCHOR_TOP")
@@ -998,6 +1014,8 @@ function UI:RefreshInner()
 			self:UpdateClickCast(nil)
 		elseif dispelSpell and current == dispelSpell then
 			self:UpdateClickCast(dispelSpell, dispelUnit, dispelName)
+		elseif missingBlessing and current == missingBlessing then
+			self:UpdateClickCast(current, "player", "You")
 		else
 			self:UpdateClickCast(current, missingGroupSpell and missingGroupUnit or nil, missingGroupSpell and missingGroupName or nil)
 		end
@@ -1086,12 +1104,18 @@ function UI:RefreshInner()
 	elseif notFacing then
 		statusText = "FACE TARGET"
 		statusColor = { 1.0, 0.28, 0.22 }
+	elseif queue.currentTargetImmune then
+		statusText = "IMMUNE!"
+		statusColor = { 1.0, 0.55, 0.20 }
 	elseif queue.currentIsInterrupt then
 		statusText = "INTERRUPT"
 		statusColor = WARN
 	elseif queue.currentPvpLabel then
 		statusText = queue.currentPvpLabel
 		statusColor = { 1.0, 0.35, 0.65 }
+	elseif queue.currentOffTargetAlert then
+		statusText = "OFF-KICK: " .. tostring(queue.currentOffTargetAlert.caster or "Caster")
+		statusColor = { 0.35, 0.85, 1.0 }
 	elseif ready then
 		statusText = "SWAP NOW"
 		statusColor = READY
@@ -1241,14 +1265,32 @@ function UI:RefreshInner()
 		if self.npFaceTag then
 			self.npFaceTag:ClearAllPoints()
 			self.npFaceTag:SetPoint("BOTTOM", self.npMain, "TOP", 0, showNpPips and 13 or 2)
-			self.npFaceTag:SetShown(notFacing and true or false)
+			if notFacing then
+				self.npFaceTag:SetText("FACE!")
+				self.npFaceTag:SetTextColor(1.0, 0.25, 0.20, 1.0)
+				self.npFaceTag:Show()
+			elseif queue.currentTargetImmune then
+				self.npFaceTag:SetText("IMMUNE!")
+				self.npFaceTag:SetTextColor(1.0, 0.55, 0.20, 1.0)
+				self.npFaceTag:Show()
+			elseif queue.currentOffTargetAlert then
+				self.npFaceTag:SetText("OFF-KICK!")
+				self.npFaceTag:SetTextColor(0.35, 0.85, 1.0, 1.0)
+				self.npFaceTag:Show()
+			else
+				self.npFaceTag:Hide()
+			end
 		end
 
 		local borderCol = GOLD
 		if notFacing then
 			borderCol = { 1.0, 0.28, 0.22 }
+		elseif queue.currentTargetImmune then
+			borderCol = { 1.0, 0.55, 0.20 }
 		elseif queue.currentIsInterrupt or warnSeal then
 			borderCol = WARN
+		elseif queue.currentOffTargetAlert then
+			borderCol = { 0.35, 0.85, 1.0 }
 		elseif queue.currentIsPvp then
 			borderCol = { 1.0, 0.35, 0.65 }
 		elseif queue.currentIsBurst then
@@ -1294,13 +1336,24 @@ function UI:RefreshInner()
 	end
 	self.wasReady = ready
 
+	local urgentLabels = {
+		["BREAK CC!"] = true,
+		["FREEDOM!"] = true,
+		["TRINKET!"] = true,
+		["BUBBLE!"] = true,
+		["DEFENSIVE!"] = true,
+		["FINISH!"] = true,
+		["UNSTEALTH!"] = true,
+	}
+	local pvpUrgentNow = (queue.currentPvpLabel and urgentLabels[queue.currentPvpLabel] == true)
+		or (queue.currentOffTargetAlert ~= nil)
+
 	if db.alertSounds ~= false and PlaySound and SOUNDKIT then
 		local fallbackKit = SOUNDKIT.IG_MAINMENU_OPTION_CHECKBOX_ON
-		local pvpUrgent = (queue.currentPvpLabel == "BREAK CC!" or queue.currentPvpLabel == "FREEDOM!")
 		if notFacing and not self.wasNotFacing then
 			local kit = SOUNDKIT.IG_MAINMENU_OPTION_CHECKBOX_OFF or fallbackKit
 			if kit then pcall(PlaySound, kit) end
-		elseif pvpUrgent and not self.wasPvpUrgent then
+		elseif pvpUrgentNow and not self.wasPvpUrgent then
 			local kit = SOUNDKIT.READY_CHECK or fallbackKit
 			if kit then pcall(PlaySound, kit) end
 		elseif queue.currentIsInterrupt and not self.wasInterrupt then
@@ -1312,7 +1365,7 @@ function UI:RefreshInner()
 		end
 	end
 	self.wasNotFacing = notFacing
-	self.wasPvpUrgent = (queue.currentPvpLabel == "BREAK CC!" or queue.currentPvpLabel == "FREEDOM!")
+	self.wasPvpUrgent = pvpUrgentNow
 	self.wasInterrupt = queue.currentIsInterrupt == true
 	self.wasProc = queue.currentIsProc == true
 

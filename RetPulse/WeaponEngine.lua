@@ -62,6 +62,18 @@ function WeaponEngine:ReadWeapon()
 		end
 		self.weaponSpeed = math.floor(baseSpeed * 100 + 0.5) / 100
 		self.speedItemID = self.weaponItemID
+		if ns.db and type(self.weaponItemID) == "number" and not ns.IsSecret(self.weaponItemID) then
+			ns.db.weaponSpeedCache = ns.db.weaponSpeedCache or {}
+			ns.db.weaponSpeedCache[self.weaponItemID] = self.weaponSpeed
+		end
+	elseif (not self.weaponSpeed or self.speedItemID ~= self.weaponItemID)
+		and ns.db and type(ns.db.weaponSpeedCache) == "table"
+		and type(self.weaponItemID) == "number" and not ns.IsSecret(self.weaponItemID) then
+		local cached = ns.db.weaponSpeedCache[self.weaponItemID]
+		if type(cached) == "number" and cached > 0 then
+			self.weaponSpeed = cached
+			self.speedItemID = self.weaponItemID
+		end
 	end
 end
 

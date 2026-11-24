@@ -39,6 +39,10 @@ ns.SPELLS = {
 	REPENTANCE      = "Repentance",
 	SEAL_JUSTICE    = "Seal of Justice",
 	WILL_OF_FORSAKEN = "Will of the Forsaken",
+	DIVINE_SHIELD   = "Divine Shield",
+	DIVINE_PROTECTION = "Divine Protection",
+	BLESSING_PROTECTION = "Blessing of Protection",
+	EVERY_MAN       = "Every Man for Himself",
 }
 
 -------------------------------------------------------------------------------
@@ -61,6 +65,13 @@ local DEFAULTS = {
 	pvpCcBreaker = true,     -- Will of the Forsaken on CC + Blessing of Freedom when slowed/rooted out of melee
 	pvpGapCloser = true,     -- Repentance at range to close gap or secondary interrupt on casting players
 	pvpAntiRunner = true,    -- Seal of Justice -> Judgement when a mobile enemy player escapes melee
+	pvpAntiImmune = true,    -- hold Burst/HoJ/Judgement when target has Bubble / Ice Block / Immunity
+	pvpExecuteSnipe = true,  -- 30yd Hammer of Wrath execute snipe & range-band prioritization
+	pvpSmartMatchup = true,  -- class/role awareness (save HoJ on Healers, Catch Blink on Mage, burst gate)
+	pvpOffTargetAlert = true, -- alert OFF-KICK! when a nearby enemy nameplate casts an interruptible spell
+	pvpDefensive = true,     -- PvP trinket / Every Man on hard CC + Divine Shield when focused while stunned
+	pvpPeel = true,          -- suggest HoJ or Blessing of Protection when attacker hits friendly healer/caster
+	pvpAntiStealth = true,   -- suggest Consecration immediately if a melee Rogue/Druid vanishes
 	crusaderOnBoss = true,   -- recommend Seal of the Crusader opener on Elites/Bosses
 	crusaderBossOnly = false, -- limit Crusader opener to worldbosses (skip dungeon trash elites)
 	talentAdvisor = true,    -- highlight RetPulse talents on PlayerSpellsFrame.TalentsFrame
@@ -199,6 +210,23 @@ function ns.IsReadable(value)
 	if ns.IsSecret(value) then return false end
 	local t = type(value)
 	return t == "number" or t == "string" or t == "boolean"
+end
+
+function ns.AreAurasSecret()
+	if C_Secrets and C_Secrets.ShouldAurasBeSecret then
+		local ok, secret = pcall(C_Secrets.ShouldAurasBeSecret)
+		if ok and not ns.IsSecret(secret) and secret == true then
+			return true
+		end
+	end
+	return false
+end
+
+function ns.SafeBool(fn, ...)
+	if type(fn) ~= "function" then return nil end
+	local ok, val = pcall(fn, ...)
+	if not ok or not ns.IsReadable(val) then return nil end
+	return val and true or false
 end
 
 -- Shared, secret-safe spell helpers (one implementation for every module).

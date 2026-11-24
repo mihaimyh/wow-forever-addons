@@ -63,6 +63,10 @@ local BASE_COOLDOWN = {
 	["Blessing of Freedom"] = 25,
 	["Repentance"] = 60,
 	["Will of the Forsaken"] = 120,
+	["Divine Shield"] = 300,
+	["Divine Protection"] = 300,
+	["Blessing of Protection"] = 300,
+	["Every Man for Himself"] = 120,
 }
 
 -- Judgement and major offensive cooldowns are off the global cooldown.
@@ -73,6 +77,7 @@ local OFF_GCD = {
 	["Blood Fury"] = true,
 	["Berserking"] = true,
 	["Will of the Forsaken"] = true,
+	["Every Man for Himself"] = true,
 }
 local GCD_SPELLS = {
 	["Holy Strike"] = true,
@@ -86,7 +91,10 @@ local GCD_SPELLS = {
 	["Blessing of Might"] = true,
 	["Blessing of Wisdom"] = true,
 	["Blessing of Freedom"] = true,
+	["Blessing of Protection"] = true,
 	["Repentance"] = true,
+	["Divine Shield"] = true,
+	["Divine Protection"] = true,
 }
 
 function PriorityQueue:OnLogin()
@@ -182,9 +190,10 @@ function PriorityQueue:GetCooldownWindow(name)
 				if info.duration > 0 and (info.startTime + info.duration) > now then
 					return info.startTime, info.duration
 				end
+				return nil, nil
 			end
 		end
-		return nil, nil
+		-- Fall through to cast-tracked cooldown model when client cooldowns are secret (e.g. Battlegrounds).
 	end
 
 	local bestStart, bestDuration, bestEnd
@@ -232,7 +241,9 @@ function PriorityQueue:GetRemainingInfo(name)
 				return remaining, "client"
 			end
 		end
-		return 0, "idle"
+		if not (self.cdUntil and self.cdUntil[name]) then
+			return 0, "idle"
+		end
 	end
 
 	local untilAt = self.cdUntil and self.cdUntil[name]
@@ -316,6 +327,7 @@ end
 function PriorityQueue:Evaluate()
 	local tracker = ns:GetModule("CombatTracker")
 	local engine = ns:GetModule("WeaponEngine")
+	local pvp = ns:GetModule("PvPEngine")
 	local db = ns.db or {}
 	local hasUnsealedWrath = (engine and engine.hasUnsealedWrath == true) or (db.twistWithoutTalent == true)
 
@@ -324,10 +336,15 @@ function PriorityQueue:Evaluate()
 	local echoes = tracker:GetEchoes()
 	local swingsWithSeal = tracker:GetSwingsWithSeal()
 
-	local isPvpTarget = tracker and tracker.IsPvpTarget and tracker:IsPvpTarget() or false
-	local inBg = tracker and tracker.IsInBattleground and tracker:IsInBattleground() or false
+	local isPvpTarget = pvp and pvp.IsPvpTarget and pvp:IsPvpTarget()
+		or ((db.pvpEnabled ~= false) and tracker and tracker.IsPvpTarget and tracker:IsPvpTarget() or false)
 	local pvpActive = (db.pvpEnabled ~= false) and isPvpTarget
-	local pvpContext = (db.pvpEnabled ~= false) and (isPvpTarget or inBg)
+	local pvpContext = pvp and pvp.IsPvpContext and pvp:IsPvpContext()
+		or ((db.pvpEnabled ~= false) and (isPvpTarget or (tracker and tracker.IsInBattleground and tracker:IsInBattleground() or false)))
+
+	if pvpActive and pvp and pvp.NoteTargetObservation then
+		pvp:NoteTargetObservation(tracker)
+	end
 
 	if pvpActive and IsKnown(ns.SPELLS.SEAL_COMMAND) then
 		primaryName = ns.SPELLS.SEAL_COMMAND
@@ -339,6 +356,15 @@ function PriorityQueue:Evaluate()
 	local exorcismTarget = creatureType == "Undead" or creatureType == "Demon"
 	local swingOpen = tracker:IsSwingWindowOpen(GCD)
 	local gcdReady = self:GetGcdRemaining() <= 0.15
+	local inMelee = hasTarget and tracker and tracker.IsInSwingRange and tracker:IsInSwingRange() or false
+	local targetImmune = pvpActive and pvp and pvp.IsTargetImmune and pvp:IsTargetImmune() or false
+
+	self.currentTargetImmune = targetImmune
+	if pvpContext and pvp and pvp.FindOffTargetCast then
+		self.currentOffTargetAlert = pvp:FindOffTargetCast(tracker, self, IsUsable)
+	else
+		self.currentOffTargetAlert = nil
+	end
 
 	local candidates = {}
 
@@ -357,19 +383,62 @@ function PriorityQueue:Evaluate()
 		}
 	end
 
-	-- -2. PvP CC Breaker: Will of the Forsaken on active CC, or Blessing of Freedom
-	--     when slowed/rooted outside melee range (strictly gated to PvP/BG).
-	if pvpContext and (db.pvpCcBreaker ~= false) then
-		if tracker and tracker.HasActiveCC and tracker:HasActiveCC()
-			and IsKnown(ns.SPELLS.WILL_OF_FORSAKEN) and IsUsable(ns.SPELLS.WILL_OF_FORSAKEN)
-			and self:IsReady(ns.SPELLS.WILL_OF_FORSAKEN) then
-			Add(ns.SPELLS.WILL_OF_FORSAKEN, false, { isPvp = true, pvpLabel = "BREAK CC!" })
+	-- -2. PvP CC Breaker, Survival & Anti-Stealth (strictly gated to PvP/BG).
+	if pvpContext then
+		local loc = pvp and pvp.GetLossOfControlInfo and pvp:GetLossOfControlInfo() or {
+			hasFearCharmSleep = tracker and tracker.HasActiveCC and tracker:HasActiveCC() or false,
+			hasHardCC = tracker and tracker.HasActiveCC and tracker:HasActiveCC() or false,
+			hasRoot = tracker and tracker.IsPlayerSlowedOrRooted and tracker:IsPlayerSlowedOrRooted() or false,
+			hasSnare = tracker and tracker.IsPlayerSlowedOrRooted and tracker:IsPlayerSlowedOrRooted() or false,
+		}
+
+		if db.pvpCcBreaker ~= false then
+			if loc.hasFearCharmSleep
+				and IsKnown(ns.SPELLS.WILL_OF_FORSAKEN) and IsUsable(ns.SPELLS.WILL_OF_FORSAKEN)
+				and self:IsReady(ns.SPELLS.WILL_OF_FORSAKEN) then
+				Add(ns.SPELLS.WILL_OF_FORSAKEN, false, { isPvp = true, pvpLabel = "BREAK CC!" })
+			elseif loc.hasHardCC and (loc.maxRemaining == nil or loc.maxRemaining >= 2.5) then
+				if IsKnown(ns.SPELLS.EVERY_MAN) and IsUsable(ns.SPELLS.EVERY_MAN) and self:IsReady(ns.SPELLS.EVERY_MAN) then
+					Add(ns.SPELLS.EVERY_MAN, false, { isPvp = true, pvpLabel = "BREAK CC!" })
+				elseif db.pvpDefensive ~= false and pvp and pvp.FindReadyPvpTrinket then
+					local pvpTrinket = pvp:FindReadyPvpTrinket()
+					if pvpTrinket then
+						Add(pvpTrinket, false, { isPvp = true, pvpLabel = "TRINKET!" })
+					end
+				end
+			end
 		end
-		if hasTarget and gcdReady and tracker and tracker.IsPlayerSlowedOrRooted and tracker:IsPlayerSlowedOrRooted()
-			and (not tracker:IsInSwingRange())
+
+		if (db.pvpDefensive ~= false) and InCombatLockdown() and pvp and pvp.CountAttackersOnPlayer then
+			local attackers = pvp:CountAttackersOnPlayer(tracker)
+			if (loc.hasHardCC and attackers >= 2) or (attackers >= 3) then
+				if gcdReady and IsKnown(ns.SPELLS.DIVINE_SHIELD) and IsUsable(ns.SPELLS.DIVINE_SHIELD)
+					and self:IsReady(ns.SPELLS.DIVINE_SHIELD) then
+					Add(ns.SPELLS.DIVINE_SHIELD, false, { isPvp = true, pvpLabel = "BUBBLE!" })
+				elseif gcdReady and not loc.hasHardCC and IsKnown(ns.SPELLS.DIVINE_PROTECTION)
+					and IsUsable(ns.SPELLS.DIVINE_PROTECTION) and self:IsReady(ns.SPELLS.DIVINE_PROTECTION) then
+					Add(ns.SPELLS.DIVINE_PROTECTION, false, { isPvp = true, pvpLabel = "DEFENSIVE!" })
+				end
+			end
+		end
+
+		if (db.pvpCcBreaker ~= false) and hasTarget and gcdReady
 			and IsKnown(ns.SPELLS.BLESSING_FREEDOM) and IsUsable(ns.SPELLS.BLESSING_FREEDOM)
 			and self:IsReady(ns.SPELLS.BLESSING_FREEDOM) then
-			Add(ns.SPELLS.BLESSING_FREEDOM, false, { isPvp = true, pvpLabel = "FREEDOM!" })
+			local targetClass = pvp and pvp.GetTargetClass and pvp:GetTargetClass() or nil
+			local needFreedom = loc.hasRoot or (loc.hasSnare and not inMelee)
+			if targetClass == "MAGE" and (db.pvpSmartMatchup ~= false) then
+				needFreedom = loc.hasRoot or (loc.hasSnare and not inMelee)
+			end
+			if needFreedom then
+				Add(ns.SPELLS.BLESSING_FREEDOM, false, { isPvp = true, pvpLabel = "FREEDOM!" })
+			end
+		end
+
+		if pvp and pvp.IsStealthVanishActive and pvp:IsStealthVanishActive() and gcdReady
+			and IsKnown(ns.SPELLS.CONSECRATION) and IsUsable(ns.SPELLS.CONSECRATION)
+			and self:IsReady(ns.SPELLS.CONSECRATION) then
+			Add(ns.SPELLS.CONSECRATION, false, { isPvp = true, pvpLabel = "UNSTEALTH!" })
 		end
 	end
 
@@ -381,9 +450,10 @@ function PriorityQueue:Evaluate()
 			local okI, itemID = pcall(GetInventoryItemID, "player", slot)
 			if okI and type(itemID) == "number" and not ns.IsSecret(itemID) then
 				local okS, spellName = pcall(C_Item.GetItemSpell, itemID)
-				if okS and type(spellName) == "string" and not ns.IsSecret(spellName) then
+				if okS and type(spellName) == "string" and not ns.IsSecret(spellName)
+					and not (pvp and pvp.IsPvpTrinketSpellName and pvp:IsPvpTrinketSpellName(spellName)) then
 					local okC, start, duration, enable = pcall(C_Item.GetItemCooldown, itemID)
-					if okC and ns.IsReadable(start) and ns.IsReadable(duration) and (enable == true or enable == 1) then
+					if okC and ns.IsReadable(start) and ns.IsReadable(duration) and ns.IsReadable(enable) and (enable == true or enable == 1) then
 						if start == 0 or duration == 0 or (start + duration - GetTime()) <= 0.2 then
 							return spellName
 						end
@@ -398,7 +468,7 @@ function PriorityQueue:Evaluate()
 	--     Hammer of Justice is ready & in range, prioritize the interrupt.
 	--     In PvP, fall back to Repentance (20yd) if HoJ is unavailable.
 	local addedInterrupt = false
-	if hasTarget and (db.suggestInterrupt ~= false) and gcdReady
+	if hasTarget and (not targetImmune) and (db.suggestInterrupt ~= false) and gcdReady
 		and tracker and tracker.IsTargetCastingInterruptible and tracker:IsTargetCastingInterruptible() then
 		if IsKnown(ns.SPELLS.HAMMER_OF_JUSTICE) and IsUsable(ns.SPELLS.HAMMER_OF_JUSTICE)
 			and self:IsReady(ns.SPELLS.HAMMER_OF_JUSTICE) and InRange(ns.SPELLS.HAMMER_OF_JUSTICE) then
@@ -447,8 +517,26 @@ function PriorityQueue:Evaluate()
 		Add(secondaryName, false)
 	end
 
+	-- 1.1. PvP 30yd Execute Snipe & Post-HoJ Double-Damage Judgement.
+	local furyUp = activeSeal == ns.SPELLS.SEAL_FURY
+	if pvpActive and hasTarget and not targetImmune then
+		if (db.pvpExecuteSnipe ~= false) and gcdReady and (not inMelee or swingOpen)
+			and IsKnown(ns.SPELLS.HAMMER_OF_WRATH) and IsUsable(ns.SPELLS.HAMMER_OF_WRATH)
+			and self:IsReady(ns.SPELLS.HAMMER_OF_WRATH) and InRange(ns.SPELLS.HAMMER_OF_WRATH) then
+			Add(ns.SPELLS.HAMMER_OF_WRATH, true, { isPvp = true, pvpLabel = "FINISH!" })
+		end
+		if (db.pvpStunCombo ~= false) and (not furyUp)
+			and pvp and pvp.IsTargetStunnedByUs and pvp:IsTargetStunnedByUs()
+			and activeSeal == ns.SPELLS.SEAL_COMMAND
+			and IsUsable(ns.SPELLS.JUDGEMENT) and self:IsReady(ns.SPELLS.JUDGEMENT) and InRange(ns.SPELLS.JUDGEMENT) then
+			Add(ns.SPELLS.JUDGEMENT, true, { isPvp = true, pvpLabel = "JUDGE STUN!" })
+		end
+	end
+
 	-- 1.2. Boss / PvP Burst: major offensive cooldowns or ready on-use trinkets.
-	if hasTarget and InCombatLockdown() and (db.suggestBurst ~= false) and (cls == "worldboss" or pvpActive) and activeSeal ~= nil then
+	local burstAllowed = (cls == "worldboss")
+		or (pvpActive and (not pvp or not pvp.IsBurstWindowReady or pvp:IsBurstWindowReady(tracker, activeSeal, self)))
+	if hasTarget and (not targetImmune) and InCombatLockdown() and (db.suggestBurst ~= false) and burstAllowed and activeSeal ~= nil then
 		local burstSpells = {
 			ns.SPELLS.AVENGING_WRATH,
 			ns.SPELLS.BLOOD_FURY,
@@ -470,12 +558,12 @@ function PriorityQueue:Evaluate()
 		end
 	end
 
-	-- 1.3. PvP Anti-Runner & Gap-Closer (only when hostile player escapes melee).
-	if pvpActive and hasTarget and not tracker:IsInSwingRange() then
+	-- 1.3. PvP Anti-Runner, Blink Catch & Gap-Closer (when hostile player escapes melee).
+	if pvpActive and (not targetImmune) and hasTarget and not inMelee then
 		if (db.pvpAntiRunner ~= false) and InCombatLockdown() and tracker.hadMeleeWithTarget and InRange(ns.SPELLS.JUDGEMENT) then
 			local mobileClasses = { DRUID = true, SHAMAN = true, HUNTER = true, ROGUE = true }
-			local okC, _, tClass = pcall(UnitClass, "target")
-			if okC and ns.IsReadable(tClass) and mobileClasses[tClass] then
+			local tClass = pvp and pvp.GetTargetClass and pvp:GetTargetClass() or nil
+			if tClass and mobileClasses[tClass] then
 				if activeSeal == ns.SPELLS.SEAL_JUSTICE and IsUsable(ns.SPELLS.JUDGEMENT) and self:IsReady(ns.SPELLS.JUDGEMENT) then
 					Add(ns.SPELLS.JUDGEMENT, true, { isPvp = true, pvpLabel = "STOP RUNNER" })
 				elseif activeSeal ~= ns.SPELLS.SEAL_JUSTICE and gcdReady and IsKnown(ns.SPELLS.SEAL_JUSTICE) and IsUsable(ns.SPELLS.SEAL_JUSTICE) then
@@ -484,17 +572,30 @@ function PriorityQueue:Evaluate()
 			end
 		end
 
-		if (db.pvpGapCloser ~= false) and gcdReady and not addedInterrupt
+		if (db.pvpSmartMatchup ~= false) and gcdReady and not addedInterrupt
+			and pvp and pvp.IsTargetBlinked and pvp:IsTargetBlinked()
+			and IsKnown(ns.SPELLS.REPENTANCE) and IsUsable(ns.SPELLS.REPENTANCE)
+			and self:IsReady(ns.SPELLS.REPENTANCE) and InRange(ns.SPELLS.REPENTANCE) then
+			Add(ns.SPELLS.REPENTANCE, true, { isPvp = true, pvpLabel = "CATCH BLINK!" })
+		elseif (db.pvpGapCloser ~= false) and gcdReady and not addedInterrupt
 			and IsKnown(ns.SPELLS.REPENTANCE) and IsUsable(ns.SPELLS.REPENTANCE)
 			and self:IsReady(ns.SPELLS.REPENTANCE) and InRange(ns.SPELLS.REPENTANCE) then
 			Add(ns.SPELLS.REPENTANCE, true, { isPvp = true, pvpLabel = "GAP CLOSE" })
 		end
 	end
 
+	-- 1.4. PvP Teammate Peel (HoJ / Blessing of Protection when attacker hits friendly caster/healer).
+	if pvpActive and (not targetImmune) and hasTarget and gcdReady and not addedInterrupt
+		and pvp and pvp.FindPeelAction then
+		local peelSpell, peelLabel = pvp:FindPeelAction(self, IsUsable, InRange)
+		if peelSpell then
+			Add(peelSpell, peelSpell == ns.SPELLS.HAMMER_OF_JUSTICE, { isPvp = true, pvpLabel = peelLabel })
+		end
+	end
+
 	-- 1.5. Glowing procs (Blizzard SpellActivationOverlay): react immediately to
 	--      any combat proc that lights up a known rotational spell.
-	local furyUp = activeSeal == ns.SPELLS.SEAL_FURY
-	if hasTarget and tracker and tracker.IsSpellGlowing then
+	if hasTarget and (not targetImmune) and tracker and tracker.IsSpellGlowing then
 		local procSpells = {
 			ns.SPELLS.EXORCISM,
 			ns.SPELLS.HAMMER_OF_WRATH,
@@ -512,8 +613,18 @@ function PriorityQueue:Evaluate()
 		end
 	end
 
+	local pvpCtx = {
+		gcdReady = gcdReady,
+		activeSeal = activeSeal,
+		targetImmune = targetImmune,
+		pq = self,
+		IsUsable = IsUsable,
+		InRange = InRange,
+	}
+
 	-- 1.9. PvP Stun Burst Combo: Hammer of Justice -> Judgement of Command (double damage).
-	if pvpActive and (db.pvpStunCombo ~= false) and hasTarget and gcdReady and activeSeal == ns.SPELLS.SEAL_COMMAND
+	if pvpActive and hasTarget and gcdReady and activeSeal == ns.SPELLS.SEAL_COMMAND
+		and (not pvp or not pvp.CanRecommendStunCombo or pvp:CanRecommendStunCombo(pvpCtx))
 		and IsKnown(ns.SPELLS.HAMMER_OF_JUSTICE) and IsUsable(ns.SPELLS.HAMMER_OF_JUSTICE)
 		and self:IsReady(ns.SPELLS.HAMMER_OF_JUSTICE) and InRange(ns.SPELLS.HAMMER_OF_JUSTICE)
 		and IsKnown(ns.SPELLS.JUDGEMENT) and IsUsable(ns.SPELLS.JUDGEMENT)
@@ -522,13 +633,14 @@ function PriorityQueue:Evaluate()
 	end
 
 	-- 2. Judgement. Never while Seal of Fury is up: its Judgement is a taunt.
-	if hasTarget and not furyUp and IsUsable(ns.SPELLS.JUDGEMENT) and self:IsReady(ns.SPELLS.JUDGEMENT) then
+	local holdJudgement = pvpActive and pvp and pvp.ShouldHoldJudgementForStunCombo and pvp:ShouldHoldJudgementForStunCombo(pvpCtx) or false
+	if hasTarget and (not targetImmune) and not furyUp and not holdJudgement and IsUsable(ns.SPELLS.JUDGEMENT) and self:IsReady(ns.SPELLS.JUDGEMENT) then
 		Add(ns.SPELLS.JUDGEMENT, true)
 	end
 
 	-- 3. Hammer of Wrath (execute <= 20%, only in an open swing window so it
 	--    does not clip a white hit). Higher priority than Holy Strike / Exorcism.
-	if hasTarget and swingOpen and gcdReady and IsUsable(ns.SPELLS.HAMMER_OF_WRATH) and self:IsReady(ns.SPELLS.HAMMER_OF_WRATH) then
+	if hasTarget and (not targetImmune) and swingOpen and gcdReady and IsUsable(ns.SPELLS.HAMMER_OF_WRATH) and self:IsReady(ns.SPELLS.HAMMER_OF_WRATH) then
 		Add(ns.SPELLS.HAMMER_OF_WRATH, true)
 	end
 
@@ -536,7 +648,7 @@ function PriorityQueue:Evaluate()
 	--    mobs in melee range via nameplates.
 	local aoeThreshold = tonumber(db.autoAoeThreshold) or 2
 	local autoAoeActive = (db.autoAoe ~= false) and tracker and tracker.GetMeleeEnemyCount and (tracker:GetMeleeEnemyCount() >= aoeThreshold)
-	local aoeActive = (db.aoe == true) or autoAoeActive
+	local aoeActive = (not targetImmune) and ((db.aoe == true) or autoAoeActive)
 	if aoeActive and gcdReady and IsUsable(ns.SPELLS.CONSECRATION) and self:IsReady(ns.SPELLS.CONSECRATION) then
 		Add(ns.SPELLS.CONSECRATION, false)
 	end
@@ -544,18 +656,20 @@ function PriorityQueue:Evaluate()
 		Add(ns.SPELLS.HOLY_WRATH, false)
 	end
 
-	-- 5. Holy Strike, core melee rotational ability.
-	if hasTarget and gcdReady and IsUsable(ns.SPELLS.HOLY_STRIKE) and self:IsReady(ns.SPELLS.HOLY_STRIKE) then
+	-- 5. Holy Strike, core melee rotational ability (skip out-of-range Holy Strike
+	--    during PvP range-band checks so 10-20yd ranged spells can surface cleanly).
+	local allowHolyStrike = (not pvpActive) or (db.pvpExecuteSnipe == false) or inMelee or InRange(ns.SPELLS.HOLY_STRIKE)
+	if hasTarget and (not targetImmune) and allowHolyStrike and gcdReady and IsUsable(ns.SPELLS.HOLY_STRIKE) and self:IsReady(ns.SPELLS.HOLY_STRIKE) then
 		Add(ns.SPELLS.HOLY_STRIKE, true)
 	end
 
 	-- 6. Exorcism, only against Undead and Demons: UnitCreatureType is readable.
-	if hasTarget and exorcismTarget and gcdReady and IsUsable(ns.SPELLS.EXORCISM) and self:IsReady(ns.SPELLS.EXORCISM) then
+	if hasTarget and (not targetImmune) and exorcismTarget and gcdReady and IsUsable(ns.SPELLS.EXORCISM) and self:IsReady(ns.SPELLS.EXORCISM) then
 		Add(ns.SPELLS.EXORCISM, true)
 	end
 
 	-- 7. Holy Shock, for hybrid/Shockadin builds when talented.
-	if hasTarget and gcdReady and IsKnown(ns.SPELLS.HOLY_SHOCK) and IsUsable(ns.SPELLS.HOLY_SHOCK) and self:IsReady(ns.SPELLS.HOLY_SHOCK) then
+	if hasTarget and (not targetImmune) and gcdReady and IsKnown(ns.SPELLS.HOLY_SHOCK) and IsUsable(ns.SPELLS.HOLY_SHOCK) and self:IsReady(ns.SPELLS.HOLY_SHOCK) then
 		Add(ns.SPELLS.HOLY_SHOCK, true)
 	end
 
@@ -623,17 +737,33 @@ function PriorityQueue:Evaluate()
 
 	self.countdown = nil
 	self.currentNoMana = false
-	if not current then
+	if not current and not targetImmune then
 		-- Nothing castable right now: first check if a ready spell is blocked
 		-- specifically by insufficient mana (insufficientPower from IsSpellUsable),
 		-- otherwise show what comes off cooldown first.
 		if InCombatLockdown() then
-			for _, item in ipairs(upcoming) do
-				if item.remaining <= 0.2 and IsNoMana(item.name) then
-					Add(item.name, item.requiresRange)
-					self.currentNoMana = true
+			-- STUN COMBO polish: while holding Judgement during the Seal GCD,
+			-- preview Hammer of Justice (waiting on GCD) with NEXT = Judgement
+			-- instead of falling through to a longer Holy Strike cooldown.
+			if holdJudgement then
+				local gcdRem = self:GetGcdRemaining()
+				if gcdRem > 0.15 then
+					Add(ns.SPELLS.HAMMER_OF_JUSTICE, true, { isPvp = true, pvpLabel = "STUN COMBO!" })
+					self.countdown = gcdRem
 					current = candidates[1]
-					break
+					if not nextAction then
+						nextAction = { name = ns.SPELLS.JUDGEMENT, inRange = InRange(ns.SPELLS.JUDGEMENT) }
+					end
+				end
+			end
+			if not current then
+				for _, item in ipairs(upcoming) do
+					if item.remaining <= 0.2 and IsNoMana(item.name) then
+						Add(item.name, item.requiresRange)
+						self.currentNoMana = true
+						current = candidates[1]
+						break
+					end
 				end
 			end
 			if not current then
@@ -661,7 +791,11 @@ function PriorityQueue:Evaluate()
 
 	self.current = current and current.name or nil
 	self.next = nextAction and nextAction.name or nil
-	self.currentInRange = current and current.inRange or nil
+	if current then
+		self.currentInRange = current.inRange
+	else
+		self.currentInRange = nil
+	end
 	self.currentIsProc = current and current.isProc == true or false
 	self.currentIsInterrupt = current and current.isInterrupt == true or false
 	self.currentIsBurst = current and current.isBurst == true or false
