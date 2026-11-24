@@ -220,6 +220,9 @@ function Config:OnInitialize()
 		self:AddCheckbox(rotCat, "RetPulse_Interrupt", "suggestInterrupt",
 			"Interrupt alerts (Hammer of Justice)", "Prioritize Hammer of Justice when your target casts an interruptible spell.")
 
+		self:AddCheckbox(rotCat, "RetPulse_FacingAlert", "facingAlert",
+			"Facing target alert", "Show FACE TARGET / FACE! warning when an attack or spell fails because you are not facing your target.")
+
 		self:AddCheckbox(rotCat, "RetPulse_CrusaderBoss", "crusaderOnBoss",
 			"Crusader opener on Boss/Elite", "Recommend Seal of the Crusader + Judgement once per Boss/Elite pull.")
 

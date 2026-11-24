@@ -705,6 +705,12 @@ function UI:BuildNameplateWidget(classicFrame)
 
 	local npNextKeyHolder, npNextKey = CreateKeybindPill(npNext)
 
+	local npFaceTag = npMain:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+	npFaceTag:SetPoint("BOTTOM", npMain, "TOP", 0, 2)
+	npFaceTag:SetText("FACE!")
+	npFaceTag:SetTextColor(1.0, 0.25, 0.20, 1.0)
+	npFaceTag:Hide()
+
 	local npRefresh = 0
 	npFrame:SetScript("OnUpdate", function(_, elapsed)
 		npRefresh = npRefresh + (elapsed or 0)
@@ -726,6 +732,7 @@ function UI:BuildNameplateWidget(classicFrame)
 	self.npNextIcon = npNextIcon
 	self.npNextKeyHolder = npNextKeyHolder
 	self.npNextKey = npNextKey
+	self.npFaceTag = npFaceTag
 end
 
 -- Optional Masque support: lets Masque skin the nameplate icons (and HUD icons)
@@ -1019,6 +1026,9 @@ function UI:RefreshInner()
 	elseif missingGroupSpell and current == missingGroupSpell then
 		statusText = "BUFF: " .. tostring(missingGroupName or missingGroupUnit)
 		statusColor = WARN
+	elseif tracker and tracker.IsNotFacing and tracker:IsNotFacing() then
+		statusText = "FACE TARGET"
+		statusColor = { 1.0, 0.28, 0.22 }
 	elseif queue.currentIsInterrupt then
 		statusText = "INTERRUPT"
 		statusColor = WARN
@@ -1130,8 +1140,15 @@ function UI:RefreshInner()
 			self.npMainIcon:SetVertexColor(1, 1, 1, 1)
 		end
 
+		local notFacing = tracker and tracker.IsNotFacing and tracker:IsNotFacing()
+		if self.npFaceTag then
+			self.npFaceTag:SetShown(notFacing and true or false)
+		end
+
 		local borderCol = GOLD
-		if queue.currentIsInterrupt or warnSeal then
+		if notFacing then
+			borderCol = { 1.0, 0.28, 0.22 }
+		elseif queue.currentIsInterrupt or warnSeal then
 			borderCol = WARN
 		elseif ready or queue.currentIsProc then
 			borderCol = READY

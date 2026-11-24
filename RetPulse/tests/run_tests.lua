@@ -2113,6 +2113,45 @@ Test("48. Friendly non-party target gets optimal missing Blessing (skipping othe
 	AssertEq(tracker:GetMissingTargetBlessing(), nil, "Target with player's own Blessing must not be prompted again")
 end)
 
+Test("49. Facing alert triggers on UI_ERROR_MESSAGE and clears on swing, cast, target change, or timeout", function()
+	local c = CreateEnv({
+		inCombat = true,
+		knownSpells = { ["Judgement"] = 20271, ["Holy Strike"] = 678, ["Seal of Righteousness"] = 20288 },
+		usableSpells = { ["Judgement"] = true, ["Holy Strike"] = true, ["Seal of Righteousness"] = true },
+	})
+	local tracker = c.ns:GetModule("CombatTracker")
+	local ui = c.ns:GetModule("UI")
+
+	c.Fire("UNIT_SPELLCAST_SUCCEEDED", "player", "s1", 20288)
+	c.Advance(1.6)
+	AssertEq(tracker:IsNotFacing(), false, "Facing alert starts false")
+
+	c.Fire("UI_ERROR_MESSAGE", 1, "You are facing the wrong way!")
+	AssertEq(tracker:IsNotFacing(), true, "UI_ERROR_MESSAGE facing error activates alert")
+
+	ui:Refresh()
+	AssertEq(ui.status:GetText(), "FACE TARGET", "HUD status must show FACE TARGET")
+
+	-- Also works on Nameplate mode (shows npFaceTag)
+	local plate = { IsForbidden = function() return false end, IsVisible = function() return true end, SetPoint = function() end }
+	c.env.C_NamePlate.GetNamePlateForUnit = function() return plate end
+	c.ns.db.nameplateMode = true
+	ui:Refresh()
+	AssertEq(ui.npFaceTag:IsShown(), true, "Nameplate FACE! badge must show when not facing")
+
+	-- A landed swing or successful cast clears the alert immediately
+	c.Fire("UNIT_SPELLCAST_SUCCEEDED", "player", "j1", 20271)
+	AssertEq(tracker:IsNotFacing(), false, "Successful cast clears facing alert")
+	ui:Refresh()
+	AssertEq(ui.npFaceTag:IsShown(), false, "Nameplate FACE! badge hides once facing is fixed")
+
+	-- Timeout after 2s clears it too
+	c.Fire("UI_ERROR_MESSAGE", 1, "Target needs to be in front of you.")
+	AssertEq(tracker:IsNotFacing(), true, "Second facing error activates alert")
+	c.Advance(2.1)
+	AssertEq(tracker:IsNotFacing(), false, "Facing alert expires after 2 seconds")
+end)
+
 print(string.format("\nResults: %d passed, %d failed", passed, failed))
 if failed > 0 then
 	os.exit(1)

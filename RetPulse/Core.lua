@@ -44,6 +44,7 @@ local DEFAULTS = {
 	autoAoeThreshold = 2, -- minimum melee enemies for Auto-AoE (2, 3 or 4)
 	manaSaver = true,     -- skip expensive openers when Consecration reports insufficient mana
 	suggestInterrupt = true, -- suggest Hammer of Justice when target casts an interruptible spell
+	facingAlert = true,      -- show FACE TARGET alert when melee/cast fails due to wrong facing
 	crusaderOnBoss = true,   -- recommend Seal of the Crusader opener on Elites/Bosses
 	crusaderBossOnly = false, -- limit Crusader opener to worldbosses (skip dungeon trash elites)
 	talentAdvisor = true,    -- highlight RetPulse talents on PlayerSpellsFrame.TalentsFrame

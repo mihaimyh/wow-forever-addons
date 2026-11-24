@@ -59,7 +59,10 @@ function CombatTracker:OnLogin()
 	end)
 
 	ns:On("UNIT_SPELLCAST_SUCCEEDED", function(_, unit, _, spellID)
-		if unit == "player" then self:OnSpellCast(spellID) end
+		if unit == "player" then
+			self.notFacingUntil = nil
+			self:OnSpellCast(spellID)
+		end
 	end)
 
 	ns:On("PLAYER_REGEN_DISABLED", function()
@@ -82,6 +85,7 @@ function CombatTracker:OnLogin()
 		self.lastSwingEventAt = nil
 		self.glowingSpells = {}
 		self.targetCasting = false
+		self.notFacingUntil = nil
 		if not InCombatLockdown() then
 			self.judgedCrusader = false
 		end
@@ -110,8 +114,22 @@ function CombatTracker:OnLogin()
 		self.targetInRangeAt = nil
 		self.targetRangeFromEvent = false
 		self.targetCasting = false
+		self.notFacingUntil = nil
 		if not InCombatLockdown() then
 			self.judgedCrusader = false
+		end
+	end)
+
+	ns:On("UI_ERROR_MESSAGE", function(_, _, message)
+		if ns.db and ns.db.facingAlert == false then return end
+		if type(message) ~= "string" or ns.IsSecret(message) then return end
+		local lower = message:lower()
+		local isFacingErr = (ERR_ATTACK_FACING and message == ERR_ATTACK_FACING)
+			or (SPELL_FAILED_UNIT_NOT_INFRONT and message == SPELL_FAILED_UNIT_NOT_INFRONT)
+			or lower:find("facing", 1, true) ~= nil
+			or lower:find("in front of you", 1, true) ~= nil
+		if isFacingErr then
+			self.notFacingUntil = GetTime() + 2.0
 		end
 	end)
 
@@ -208,6 +226,7 @@ function CombatTracker:OnSwing(duration, swingType)
 
 	self.lastSwingEventAt = now
 	self.swingAccepted = (self.swingAccepted or 0) + 1
+	self.notFacingUntil = nil
 
 	if ns.IsReadable(duration) then
 		self.swingStart = now
@@ -1061,6 +1080,11 @@ end
 
 function CombatTracker:HasJudgedCrusader()
 	return self.judgedCrusader == true
+end
+
+function CombatTracker:IsNotFacing()
+	if ns.db and ns.db.facingAlert == false then return false end
+	return self.notFacingUntil ~= nil and GetTime() < self.notFacingUntil
 end
 
 function CombatTracker:DebugLine()
