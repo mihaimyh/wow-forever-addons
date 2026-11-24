@@ -798,6 +798,25 @@ function UI:GetTargetNameplate(db, hasHostile)
 	return plate
 end
 
+-- Prefer the visible health bar / UnitFrame inside the nameplate container
+-- (BetterBlizzPlates and Blizzard both center a narrower healthBar inside a
+-- wider NamePlateFrame, which otherwise leaves a large gap on the left).
+function UI:GetNameplateAnchor(plate)
+	if not plate then return nil end
+	local uf = plate.UnitFrame
+	if type(uf) == "table" and (type(uf.IsForbidden) ~= "function" or not uf:IsForbidden()) then
+		local hb = uf.healthBar or (uf.HealthBarsContainer and uf.HealthBarsContainer.healthBar)
+		if type(hb) == "table" and (type(hb.IsForbidden) ~= "function" or not hb:IsForbidden())
+			and (type(hb.IsVisible) ~= "function" or hb:IsVisible()) then
+			return hb
+		end
+		if type(uf.IsVisible) ~= "function" or uf:IsVisible() then
+			return uf
+		end
+	end
+	return plate
+end
+
 function UI:UpdateClickCast(spell, targetUnit, targetName)
 	local btn = self.clickBtn
 	if not btn or InCombatLockdown() then return end
@@ -865,8 +884,9 @@ function UI:RefreshInner()
 		self:UpdateClickCast(nil)
 		if self.lastNpPlate ~= targetPlate then
 			self.lastNpPlate = targetPlate
+			local anchor = self:GetNameplateAnchor(targetPlate) or targetPlate
 			self.npFrame:ClearAllPoints()
-			self.npFrame:SetPoint("RIGHT", targetPlate, "LEFT", -8, 0)
+			self.npFrame:SetPoint("RIGHT", anchor, "LEFT", -4, 0)
 		end
 		self.npFrame:SetScale(db.scale or 1.0)
 		self.npFrame:Show()
