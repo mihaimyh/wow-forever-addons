@@ -2005,10 +2005,12 @@ Test("46. Nameplate mode attaches compact icons to target nameplate, follows tar
 	AssertEq(ui.lastNpPlate, plateB, "Switching target must move compact widget to new target nameplate")
 	AssertEq(ui.npFrame:IsShown(), true, "Compact widget stays shown on new target")
 
-	-- Adjusting nameplateOffsetX updates the stored offset immediately
+	-- Adjusting nameplateOffsetX / Y updates the stored offsets immediately
 	c.ns.db.nameplateOffsetX = 12
+	c.ns.db.nameplateOffsetY = -6
 	ui:Refresh()
 	AssertEq(ui.lastNpOffsetX, 12, "Nameplate X offset slider value must apply immediately")
+	AssertEq(ui.lastNpOffsetY, -6, "Nameplate Y offset slider value must apply immediately")
 
 	-- No visible nameplate (e.g. off-screen or out of combat) -> falls back to classic HUD
 	currentPlate = nil
