@@ -233,6 +233,22 @@ local function CreateEnv(opts)
 	end
 	function env.PlaySound() end
 	function env.UnitClass() return "Paladin", playerClass, 2 end
+	-- Classic/Mainline class colors used by HUD BUFF:/DISPEL: name tinting.
+	env.RAID_CLASS_COLORS = {
+		WARRIOR = { r = 0.78, g = 0.61, b = 0.43 },
+		PALADIN = { r = 0.96, g = 0.55, b = 0.73 },
+		HUNTER = { r = 0.67, g = 0.83, b = 0.45 },
+		ROGUE = { r = 1.00, g = 0.96, b = 0.41 },
+		PRIEST = { r = 1.00, g = 1.00, b = 1.00 },
+		DEATHKNIGHT = { r = 0.77, g = 0.12, b = 0.23 },
+		SHAMAN = { r = 0.00, g = 0.44, b = 0.87 },
+		MAGE = { r = 0.25, g = 0.78, b = 0.92 },
+		WARLOCK = { r = 0.53, g = 0.53, b = 0.93 },
+		MONK = { r = 0.00, g = 1.00, b = 0.59 },
+		DRUID = { r = 1.00, g = 0.49, b = 0.04 },
+		DEMONHUNTER = { r = 0.64, g = 0.19, b = 0.79 },
+		EVOKER = { r = 0.20, g = 0.58, b = 0.50 },
+	}
 	function env.UnitLevel() return opts.playerLevel or 20 end
 	function env.UnitName() return targetExists and "Test Mob" or nil end
 	function env.UnitIsDeadOrGhost() return false end
@@ -1843,7 +1859,7 @@ Test("42. Group buff advisor detects missing party/raid blessings by class and a
 	ui:Refresh()
 	AssertEq(attrs.spell, "Blessing of Kings", "Click-to-cast must arm Blessing of Kings")
 	AssertEq(attrs.unit, "party1", "Click-to-cast must target party1")
-	AssertEq(ui.status:GetText(), "BUFF: Grom", "HUD status must show who needs the buff")
+	AssertEq(ui.status:GetText(), "BUFF: |cffc79c6eGrom|r", "HUD status must show class-colored buff target name")
 
 	-- Buff party1 -> now party2 (Mage with Kings) should get Blessing of Wisdom
 	partyAuras.party1 = { { name = "Blessing of Kings", spellId = 20217, sourceUnit = "player", expirationTime = 4000 } }
@@ -2119,7 +2135,7 @@ Test("48. Friendly non-party target gets optimal missing Blessing (skipping othe
 	ui:Refresh()
 	AssertEq(attrs.spell, "Blessing of Might", "Click-to-cast must arm Blessing of Might")
 	AssertEq(attrs.unit, "target", "Click-to-cast must target 'target'")
-	AssertEq(ui.status:GetText(), "BUFF: Garrosh", "HUD status must show BUFF: Garrosh")
+	AssertEq(ui.status:GetText(), "BUFF: |cffc79c6eGarrosh|r", "HUD status must show class-colored BUFF: Garrosh")
 
 	-- Once player casts their own Blessing on target, no further buff is suggested
 	targetAuras[2] = { name = "Blessing of Might", spellId = 19740, sourceUnit = "player", expirationTime = 4000 }
@@ -2288,6 +2304,10 @@ Test("53. Out-of-combat Dispel reminder surfaces Cleanse/Purify for harmful debu
 	c.env.UnitIsDeadOrGhost = function() return false end
 	c.env.UnitIsUnit = function(a, b) return a == b end
 	c.env.UnitName = function(u) return u == "party1" and "Thrall" or u end
+	c.env.UnitClass = function(u)
+		if u == "party1" then return "Shaman", "SHAMAN" end
+		return "Paladin", "PALADIN"
+	end
 	c.env.C_Spell.IsSpellInRange = function(_, u) return u == "party1" end
 	c.env.C_UnitAuras.GetAuraDataByIndex = function(u, idx, filter)
 		if filter == "HARMFUL" then
@@ -2314,7 +2334,7 @@ Test("53. Out-of-combat Dispel reminder surfaces Cleanse/Purify for harmful debu
 	ui:Refresh()
 	AssertEq(attrs.spell, "Purify", "Click-to-cast must arm Purify")
 	AssertEq(attrs.unit, "party1", "Click-to-cast must target party1")
-	AssertEq(ui.status:GetText(), "DISPEL: Thrall", "HUD status must show DISPEL: Thrall")
+	AssertEq(ui.status:GetText(), "DISPEL: |cff0070deThrall|r", "HUD status must show class-colored DISPEL: Thrall")
 
 	partyHarmful.party1 = { { name = "Polymorph", spellId = 118, dispelName = "Magic" } }
 	AssertEq(tracker:GetMissingDispel(), nil, "Purify alone must not suggest dispelling Magic")
@@ -3251,7 +3271,7 @@ Test("73. HUD click-to-buff PreClick marks exact teammate even when UNIT_SPELLCA
 	tracker.ownBlessingExpiry = { ["Blessing of Kings"] = c.env.GetTime() + 300 }
 	c.Fire("PLAYER_ENTERING_WORLD")
 	ui:Refresh()
-	AssertEq(ui.status:GetText(), "BUFF: Иван", "Initial HUD must suggest Иван")
+	AssertEq(ui.status:GetText(), "BUFF: |cffc79c6eИван|r", "Initial HUD must suggest class-colored Иван")
 	AssertEq(ui.clickUnit, "raid1", "clickUnit must be raid1")
 
 	-- Simulate clicking HUD (PreClick) + Blizzard reporting "Unknown" in UNIT_SPELLCAST_SENT
@@ -3259,7 +3279,7 @@ Test("73. HUD click-to-buff PreClick marks exact teammate even when UNIT_SPELLCA
 	c.Fire("UNIT_SPELLCAST_SENT", "player", "Unknown", "c1", 20217)
 	c.Fire("UNIT_SPELLCAST_SUCCEEDED", "player", "c1", 20217)
 
-	AssertEq(ui.status:GetText(), "BUFF: Morthor (*)", "After buffing Иван, HUD must immediately advance to Morthor (*)")
+	AssertEq(ui.status:GetText(), "BUFF: |cffc79c6eMorthor (*)|r", "After buffing Иван, HUD must immediately advance to class-colored Morthor (*)")
 	AssertEq(ui.clickUnit, "raid2", "clickUnit must now be raid2")
 
 	-- Second click with cross-realm "Morthor-Icecrown" in SENT -> advances to no remaining buffs

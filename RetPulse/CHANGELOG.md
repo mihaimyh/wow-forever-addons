@@ -13,6 +13,7 @@ All notable changes to **RetPulse** for **World of Warcraft: Forever (Interface 
 - **STUN COMBO! GCD preview**: while holding Judgement after Seal of Command, the HUD now previews `Hammer of Justice` (waiting on GCD) with `NEXT = Judgement` instead of briefly flashing `Holy Strike`.
 - **Secret-safe combat reads**: boolean/unit helpers and BG cooldown fallbacks no longer taint or throw when Forever returns secret values inside Battlegrounds.
 - **Range propagation**: out-of-range abilities keep `currentInRange = false` (never coerced to `nil`), so the HUD range tint stays accurate live.
+- **Class-colored buff targets**: `BUFF:` / `DISPEL:` HUD status names render in the teammate's class color.
 
 ## [2.0.0] - 2026-11-24
 

@@ -47,6 +47,61 @@ local function Fmt(value)
 	return string.format("%.1fs", value)
 end
 
+-- Class-colored display name for HUD status lines (BUFF: / DISPEL:).
+-- Uses |cffRRGGBB escape codes so "BUFF: " keeps the status tint while the
+-- name renders in RAID_CLASS_COLORS / C_ClassColor.
+local function ClassColoredName(unit, name)
+	local display = name
+	if type(display) ~= "string" or display == "" or (ns.IsSecret and ns.IsSecret(display)) then
+		display = (type(unit) == "string" and unit) or ""
+	end
+	if display == "" then return display end
+
+	local classFile
+	if type(unit) == "string" and unit ~= "" and UnitClass then
+		local ok, localized, file = pcall(UnitClass, unit)
+		if ok then
+			if type(file) == "string" and not (ns.IsSecret and ns.IsSecret(file)) then
+				classFile = file
+			elseif type(localized) == "string" and not (ns.IsSecret and ns.IsSecret(localized)) then
+				-- Some test/shim environments return the class token as the first value.
+				classFile = localized
+			end
+		end
+	end
+	if not classFile then return display end
+
+	local r, g, b
+	if C_ClassColor and C_ClassColor.GetClassColor then
+		local okC, color = pcall(C_ClassColor.GetClassColor, classFile)
+		if okC and type(color) == "table" then
+			if type(color.GetRGB) == "function" then
+				local okRGB, cr, cg, cb = pcall(color.GetRGB, color)
+				if okRGB then r, g, b = cr, cg, cb end
+			end
+			if r == nil then
+				r, g, b = color.r, color.g, color.b
+			end
+		end
+	end
+	if (r == nil or g == nil or b == nil) and RAID_CLASS_COLORS and RAID_CLASS_COLORS[classFile] then
+		local color = RAID_CLASS_COLORS[classFile]
+		r, g, b = color.r, color.g, color.b
+	end
+	if type(r) ~= "number" or type(g) ~= "number" or type(b) ~= "number" then
+		return display
+	end
+	if ns.IsSecret and (ns.IsSecret(r) or ns.IsSecret(g) or ns.IsSecret(b)) then
+		return display
+	end
+
+	return string.format("|cff%02x%02x%02x%s|r",
+		math.floor(r * 255 + 0.5),
+		math.floor(g * 255 + 0.5),
+		math.floor(b * 255 + 0.5),
+		display)
+end
+
 local function CreateKeybindPill(parent)
 	local holder = CreateFrame("Frame", nil, parent)
 	holder:SetPoint("TOPRIGHT", parent, "TOPRIGHT", 2, 2)
@@ -1087,7 +1142,7 @@ function UI:RefreshInner()
 	local notFacing = tracker and tracker.IsNotFacing and tracker:IsNotFacing() or false
 
 	if dispelSpell and current == dispelSpell then
-		statusText = "DISPEL: " .. tostring(dispelName or dispelUnit)
+		statusText = "DISPEL: " .. ClassColoredName(dispelUnit, dispelName or dispelUnit)
 		statusColor = { 0.35, 0.85, 1.0 }
 	elseif threatWarning and current == threatWarning then
 		statusText = "THREAT BUFF ON!"
@@ -1099,7 +1154,7 @@ function UI:RefreshInner()
 		statusText = "AURA MISSING"
 		statusColor = WARN
 	elseif missingGroupSpell and current == missingGroupSpell then
-		statusText = "BUFF: " .. tostring(missingGroupName or missingGroupUnit)
+		statusText = "BUFF: " .. ClassColoredName(missingGroupUnit, missingGroupName or missingGroupUnit)
 		statusColor = WARN
 	elseif notFacing then
 		statusText = "FACE TARGET"
