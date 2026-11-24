@@ -116,6 +116,29 @@ function runTests() {
 	}
 }
 
+function getChangelogFromFile(version) {
+	const candidates = [
+		path.join(ADDON_DIR, "CHANGELOG.md"),
+		path.join(REPO_ROOT, "CHANGELOG.md"),
+	];
+	const changelogPath = candidates.find((p) => fs.existsSync(p));
+	if (!changelogPath) return null;
+
+	const text = fs.readFileSync(changelogPath, "utf8").replace(/\r\n/g, "\n");
+	const escaped = version.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+	const headerRe = new RegExp(`^##\\s+\\[?v?${escaped}\\]?(?:\\s|$).*$`, "m");
+	const match = headerRe.exec(text);
+	if (!match) return null;
+
+	const start = match.index + match[0].length;
+	const rest = text.slice(start);
+	const nextHeading = rest.search(/\n##\s+/);
+	const body = (nextHeading === -1 ? rest : rest.slice(0, nextHeading)).trim();
+	if (!body) return null;
+
+	return `### ${ADDON_NAME} v${version}\n\n${body}`;
+}
+
 function getAutoChangelog(version) {
 	try {
 		const tags = execFileSync("git", ["tag", "--sort=-v:refname"], {
@@ -168,6 +191,7 @@ function buildZip(version, tocFiles) {
 	fs.mkdirSync(stageAddon, { recursive: true });
 
 	const filesToCopy = [`${ADDON_NAME}.toc`, ...tocFiles];
+	if (fs.existsSync(path.join(ADDON_DIR, "CHANGELOG.md"))) filesToCopy.push("CHANGELOG.md");
 	if (fs.existsSync(path.join(ADDON_DIR, "LICENSE"))) filesToCopy.push("LICENSE");
 	if (fs.existsSync(path.join(REPO_ROOT, "LICENSE")) && !filesToCopy.includes("LICENSE")) {
 		fs.copyFileSync(path.join(REPO_ROOT, "LICENSE"), path.join(stageAddon, "LICENSE"));
@@ -242,7 +266,7 @@ async function main() {
 	const sizeKb = (fs.statSync(zipPath).size / 1024).toFixed(1);
 	console.log(`    Created: ${zipPath} (${sizeKb} KB)`);
 
-	const changelog = opts.changelog || getAutoChangelog(version);
+	const changelog = opts.changelog || getChangelogFromFile(version) || getAutoChangelog(version);
 	const metadata = {
 		changelog,
 		changelogType: "markdown",
