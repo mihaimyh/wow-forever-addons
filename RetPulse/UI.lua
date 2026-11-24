@@ -421,6 +421,8 @@ function UI:Build()
 		end
 	end)
 
+	local okMsq, errMsq = pcall(self.InitMasque, self)
+	if not okMsq then ns:RecordError("InitMasque", errMsq) end
 	frame:Hide()
 end
 
@@ -720,9 +722,64 @@ function UI:BuildNameplateWidget(classicFrame)
 	self.npMainKeyHolder = npMainKeyHolder
 	self.npMainKey = npMainKey
 	self.npNext = npNext
+	self.npNextBorder = npNextBorder
 	self.npNextIcon = npNextIcon
 	self.npNextKeyHolder = npNextKeyHolder
 	self.npNextKey = npNextKey
+end
+
+-- Optional Masque support: lets Masque skin the nameplate icons (and HUD icons)
+-- without any hard dependency when Masque is not installed.
+function UI:InitMasque()
+	if not LibStub then return end
+	local ok, MSQ = pcall(LibStub, "Masque", true)
+	if not ok or not MSQ or type(MSQ.Group) ~= "function" then return end
+
+	if self.npMain and self.npMainIcon then
+		local okG, npGroup = pcall(MSQ.Group, MSQ, "RetPulse", "Nameplate Icons")
+		if okG and npGroup and type(npGroup.AddButton) == "function" then
+			pcall(npGroup.AddButton, npGroup, self.npMain, {
+				Icon = self.npMainIcon,
+				Cooldown = self.npCooldown,
+				Normal = false,
+				Highlight = false,
+				Pushed = false,
+			})
+			if self.npNext and self.npNextIcon then
+				pcall(npGroup.AddButton, npGroup, self.npNext, {
+					Icon = self.npNextIcon,
+					Normal = false,
+					Highlight = false,
+					Pushed = false,
+				})
+			end
+			if self.npMainBorder then self.npMainBorder:SetAlpha(0) end
+			if self.npNextBorder then self.npNextBorder:SetAlpha(0) end
+			self.npMasqued = true
+		end
+	end
+
+	if self.main and self.mainIcon then
+		local okG, hudGroup = pcall(MSQ.Group, MSQ, "RetPulse", "HUD Icons")
+		if okG and hudGroup and type(hudGroup.AddButton) == "function" then
+			pcall(hudGroup.AddButton, hudGroup, self.main, {
+				Icon = self.mainIcon,
+				Cooldown = self.cooldown,
+				Normal = false,
+				Highlight = false,
+				Pushed = false,
+			})
+			if self.nextFrame and self.nextIcon then
+				pcall(hudGroup.AddButton, hudGroup, self.nextFrame, {
+					Icon = self.nextIcon,
+					Normal = false,
+					Highlight = false,
+					Pushed = false,
+				})
+			end
+			self.hudMasqued = true
+		end
+	end
 end
 
 function UI:GetTargetNameplate(db, hasHostile)
@@ -1052,7 +1109,9 @@ function UI:RefreshInner()
 		elseif queue.currentNoMana then
 			borderCol = OOM
 		end
-		self.npMainBorder:SetColorTexture(borderCol[1], borderCol[2], borderCol[3], 0.90)
+		if not self.npMasqued then
+			self.npMainBorder:SetColorTexture(borderCol[1], borderCol[2], borderCol[3], 0.90)
+		end
 
 		UpdateKeybindPill(self.npMainKeyHolder, self.npMainKey, mainKeyText)
 		if nextTexture then

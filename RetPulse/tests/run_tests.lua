@@ -2012,6 +2012,38 @@ Test("46. Nameplate mode attaches compact icons to target nameplate, follows tar
 	AssertEq(ui.frame:IsShown(), true, "Classic HUD returns as fallback in combat when nameplate is missing")
 end)
 
+Test("47. Optional Masque integration registers Nameplate Icons and HUD Icons groups when LibStub Masque is present", function()
+	local added = {}
+	local groups = {}
+	local c = CreateEnv({})
+	c.env.LibStub = function(name, silent)
+		if name == "Masque" then
+			return {
+				Group = function(_, addon, groupName)
+					local g = {
+						AddButton = function(_, btn, data)
+							added[groupName] = added[groupName] or {}
+							added[groupName][#added[groupName] + 1] = { btn = btn, data = data }
+						end,
+					}
+					groups[groupName] = g
+					return g
+				end,
+			}
+		end
+		return nil
+	end
+
+	local ui = c.ns:GetModule("UI")
+	ui:InitMasque()
+	Assert(groups["Nameplate Icons"] ~= nil, "Masque must register 'Nameplate Icons' group")
+	Assert(groups["HUD Icons"] ~= nil, "Masque must register 'HUD Icons' group")
+	AssertEq(#added["Nameplate Icons"], 2, "Nameplate Icons group must register npMain and npNext")
+	AssertEq(added["Nameplate Icons"][1].data.Icon, ui.npMainIcon, "npMainIcon passed to Masque")
+	AssertEq(added["Nameplate Icons"][1].data.Cooldown, ui.npCooldown, "npCooldown passed to Masque")
+	AssertEq(#added["HUD Icons"], 2, "HUD Icons group must register main and nextFrame")
+end)
+
 print(string.format("\nResults: %d passed, %d failed", passed, failed))
 if failed > 0 then
 	os.exit(1)
