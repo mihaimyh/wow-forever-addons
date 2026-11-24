@@ -1953,6 +1953,65 @@ Test("45. /rp config opens the Settings panel via ns:OpenOptions", function()
 	AssertEq(openedCategoryID, 777, "/rp config must open the RetPulse Settings category")
 end)
 
+Test("46. Nameplate mode attaches compact icons to target nameplate, follows target switches, and falls back to HUD", function()
+	local plateA = {
+		IsForbidden = function() return false end,
+		IsVisible = function() return true end,
+		_points = {},
+		SetPoint = function() end,
+	}
+	local plateB = {
+		IsForbidden = function() return false end,
+		IsVisible = function() return true end,
+		_points = {},
+		SetPoint = function() end,
+	}
+	local currentPlate = plateA
+
+	local c = CreateEnv({
+		inCombat = true,
+		targetExists = true,
+		targetHostile = true,
+		knownSpells = {
+			["Judgement"] = 20271,
+			["Holy Strike"] = 678,
+			["Seal of Righteousness"] = 20288,
+		},
+		usableSpells = {
+			["Judgement"] = true,
+			["Holy Strike"] = true,
+			["Seal of Righteousness"] = true,
+		},
+	})
+	c.env.C_NamePlate.GetNamePlateForUnit = function(unit)
+		if unit == "target" then return currentPlate end
+		return nil
+	end
+	c.Fire("UNIT_SPELLCAST_SUCCEEDED", "player", "s1", 20288)
+	c.Advance(1.6)
+
+	local ui = c.ns:GetModule("UI")
+	c.ns.db.nameplateMode = true
+	ui:Refresh()
+
+	Assert(ui.npFrame ~= nil, "Compact nameplate frame must be created")
+	AssertEq(ui.npFrame:IsShown(), true, "Compact nameplate frame must show when target nameplate is visible")
+	AssertEq(ui.frame:IsShown(), false, "Classic HUD must hide while compact nameplate frame is active")
+	AssertEq(ui.lastNpPlate, plateA, "Compact widget must attach to target plateA")
+
+	-- Switching target moves compact widget automatically to plateB
+	currentPlate = plateB
+	c.Fire("PLAYER_TARGET_CHANGED")
+	AssertEq(ui.lastNpPlate, plateB, "Switching target must move compact widget to new target nameplate")
+	AssertEq(ui.npFrame:IsShown(), true, "Compact widget stays shown on new target")
+
+	-- No visible nameplate (e.g. off-screen or out of combat) -> falls back to classic HUD
+	currentPlate = nil
+	c.Fire("PLAYER_TARGET_CHANGED")
+	AssertEq(ui.npFrame:IsShown(), false, "Compact widget hides when target has no visible nameplate")
+	AssertEq(ui.frame:IsShown(), true, "Classic HUD returns as fallback in combat when nameplate is missing")
+end)
+
 print(string.format("\nResults: %d passed, %d failed", passed, failed))
 if failed > 0 then
 	os.exit(1)

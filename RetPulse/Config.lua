@@ -80,6 +80,12 @@ function Config:OnInitialize()
 
 		AddSection(layout, "HUD & Visuals")
 
+		self:AddCheckbox(category, "RetPulse_NameplateMode", "nameplateMode",
+			"Attach to target nameplate", "Show compact spell + NEXT icons to the left of your target's nameplate; falls back to the classic HUD when no nameplate is visible.", function()
+				local ui = ns:GetModule("UI")
+				if ui then ui:Refresh() end
+			end)
+
 		self:AddCheckbox(category, "RetPulse_ShowKeybinds", "showKeybinds",
 			"Show keybinds", "Display action-bar keybind badges on the main and next icons.", function()
 				local ui = ns:GetModule("UI")

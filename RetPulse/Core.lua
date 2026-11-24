@@ -57,6 +57,7 @@ local DEFAULTS = {
 	showOutOfCombat = false,     -- legacy mirror of visibility
 	combatOnly = true,           -- legacy mirror of visibility
 	showKeybinds = true,         -- show action-bar keybind badges on icons
+	nameplateMode = false,       -- attach compact rotation icons to target nameplate when visible
 	clickToCast = true,          -- click the HUD icon to cast the recommendation (out of combat only)
 	schema = 5,
 	twistWithoutTalent = false, -- twist below 40, as the sim video advises

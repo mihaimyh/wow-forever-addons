@@ -116,6 +116,12 @@ function UI:OnLogin()
 		self:Refresh()
 	end)
 	ns:On("PLAYER_TARGET_CHANGED", function() self:Refresh() end)
+	ns:On("NAME_PLATE_UNIT_ADDED", function()
+		if ns.db and ns.db.nameplateMode then self:Refresh() end
+	end)
+	ns:On("NAME_PLATE_UNIT_REMOVED", function()
+		if ns.db and ns.db.nameplateMode then self:Refresh() end
+	end)
 	ns:On("UNIT_POWER_UPDATE", function(_, unit)
 		if unit == "player" then self:UpdateManaBar() end
 	end)
@@ -362,6 +368,8 @@ function UI:Build()
 	self.frame = frame
 	local okClick, errClick = pcall(self.BuildClickCast, self, frame, main, cooldown)
 	if not okClick then ns:RecordError("BuildClickCast", errClick) end
+	local okNp, errNp = pcall(self.BuildNameplateWidget, self, frame)
+	if not okNp then ns:RecordError("BuildNameplateWidget", errNp) end
 	self.caption = caption
 	self.accent = accent
 	self.dial = dial
@@ -642,6 +650,97 @@ function UI:BuildClickCast(frame, main, cooldown)
 	self.clickBtn = btn
 end
 
+-- Compact nameplate widget: main icon (34x34) + tiny NEXT icon (22x22) to its
+-- left, anchored to the left of the selected enemy's nameplate. Parented to
+-- UIParent so Blizzard nameplate taint/lockdown never blocks updates.
+function UI:BuildNameplateWidget(classicFrame)
+	local npFrame = CreateFrame("Frame", nil, UIParent)
+	if classicFrame and classicFrame.GetFrameStrata then
+		npFrame:SetFrameStrata(classicFrame:GetFrameStrata())
+	end
+	SetPixelSize(npFrame, 60, 34)
+	npFrame:Hide()
+
+	local npMain = CreateFrame("Frame", nil, npFrame)
+	SetPixelSize(npMain, 34, 34)
+	npMain:SetPoint("RIGHT", npFrame, "RIGHT", 0, 0)
+
+	local npMainBorder = npMain:CreateTexture(nil, "BACKGROUND")
+	npMainBorder:SetPoint("TOPLEFT", -1, 1)
+	npMainBorder:SetPoint("BOTTOMRIGHT", 1, -1)
+	npMainBorder:SetColorTexture(GOLD[1], GOLD[2], GOLD[3], 0.80)
+
+	local npMainIcon = npMain:CreateTexture(nil, "ARTWORK")
+	npMainIcon:SetAllPoints()
+	npMainIcon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
+
+	local npCooldown = CreateFrame("Cooldown", nil, npMain, "CooldownFrameTemplate")
+	npCooldown:SetAllPoints(npMain)
+	npCooldown:SetDrawEdge(true)
+	npCooldown:SetDrawBling(false)
+	npCooldown:SetHideCountdownNumbers(true)
+	npCooldown:SetSwipeColor(0, 0, 0, 0.65)
+	npCooldown:Hide()
+
+	local npMainKeyOverlay = CreateFrame("Frame", nil, npMain)
+	npMainKeyOverlay:SetAllPoints(npMain)
+	npMainKeyOverlay:SetFrameLevel(npCooldown:GetFrameLevel() + 2)
+	local npMainKeyHolder, npMainKey = CreateKeybindPill(npMainKeyOverlay)
+
+	local npNext = CreateFrame("Frame", nil, npFrame)
+	SetPixelSize(npNext, 22, 22)
+	npNext:SetPoint("RIGHT", npMain, "LEFT", -4, 0)
+
+	local npNextBorder = npNext:CreateTexture(nil, "BACKGROUND")
+	npNextBorder:SetPoint("TOPLEFT", -1, 1)
+	npNextBorder:SetPoint("BOTTOMRIGHT", 1, -1)
+	npNextBorder:SetColorTexture(GOLD[1], GOLD[2], GOLD[3], 0.38)
+
+	local npNextIcon = npNext:CreateTexture(nil, "ARTWORK")
+	npNextIcon:SetAllPoints()
+	npNextIcon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
+	npNextIcon:SetAlpha(0.90)
+
+	local npNextKeyHolder, npNextKey = CreateKeybindPill(npNext)
+
+	local npRefresh = 0
+	npFrame:SetScript("OnUpdate", function(_, elapsed)
+		npRefresh = npRefresh + (elapsed or 0)
+		if npRefresh >= 0.08 then
+			npRefresh = 0
+			self:Refresh()
+		end
+	end)
+
+	self.npFrame = npFrame
+	self.npMain = npMain
+	self.npMainBorder = npMainBorder
+	self.npMainIcon = npMainIcon
+	self.npCooldown = npCooldown
+	self.npMainKeyHolder = npMainKeyHolder
+	self.npMainKey = npMainKey
+	self.npNext = npNext
+	self.npNextIcon = npNextIcon
+	self.npNextKeyHolder = npNextKeyHolder
+	self.npNextKey = npNextKey
+end
+
+function UI:GetTargetNameplate(db, hasHostile)
+	if not db or not db.nameplateMode or not hasHostile then return nil end
+	if not C_NamePlate or not C_NamePlate.GetNamePlateForUnit then return nil end
+	local ok, plate = pcall(C_NamePlate.GetNamePlateForUnit, "target", false)
+	if not ok or not plate or type(plate) ~= "table" then return nil end
+	if type(plate.IsForbidden) == "function" then
+		local okF, forbidden = pcall(plate.IsForbidden, plate)
+		if not okF or forbidden then return nil end
+	end
+	if type(plate.IsVisible) == "function" then
+		local okV, shown = pcall(plate.IsVisible, plate)
+		if not okV or not shown then return nil end
+	end
+	return plate
+end
+
 function UI:UpdateClickCast(spell, targetUnit, targetName)
 	local btn = self.clickBtn
 	if not btn or InCombatLockdown() then return end
@@ -696,13 +795,32 @@ function UI:RefreshInner()
 
 	local placing = (not db.locked) and GetTime() < (self.revealUntil or 0)
 	local hasReminder = (missingBlessing ~= nil) or (missingAura ~= nil) or (missingGroupSpell ~= nil)
-	local visible = self:ShouldBeVisible(db, inCombat, hasHostile, placing) or hasReminder
-	local desiredAlpha = (inCombat or placing or hasReminder) and 1.0 or IDLE_ALPHA
+	local targetPlate = (not hasReminder) and self:GetTargetNameplate(db, hasHostile) or nil
+	local useNameplate = (targetPlate ~= nil) and (self.npFrame ~= nil)
 
-	self:SetDesiredVisible(visible, placing, desiredAlpha)
-	if not visible then
+	if useNameplate then
+		self:SetDesiredVisible(false, true)
 		self:UpdateClickCast(nil)
-		return
+		if self.lastNpPlate ~= targetPlate then
+			self.lastNpPlate = targetPlate
+			self.npFrame:ClearAllPoints()
+			self.npFrame:SetPoint("RIGHT", targetPlate, "LEFT", -8, 0)
+		end
+		self.npFrame:SetScale(db.scale or 1.0)
+		self.npFrame:Show()
+	else
+		if self.npFrame then
+			self.npFrame:Hide()
+			self.lastNpPlate = nil
+		end
+		local visible = self:ShouldBeVisible(db, inCombat, hasHostile, placing) or hasReminder
+		local desiredAlpha = (inCombat or placing or hasReminder) and 1.0 or IDLE_ALPHA
+
+		self:SetDesiredVisible(visible, placing, desiredAlpha)
+		if not visible then
+			self:UpdateClickCast(nil)
+			return
+		end
 	end
 
 	self:UpdateManaBar()
@@ -739,7 +857,9 @@ function UI:RefreshInner()
 	end
 
 	local displayName = current
-	self:UpdateClickCast(current, missingGroupSpell and missingGroupUnit or nil, missingGroupSpell and missingGroupName or nil)
+	if not useNameplate then
+		self:UpdateClickCast(current, missingGroupSpell and missingGroupUnit or nil, missingGroupSpell and missingGroupName or nil)
+	end
 	if not displayName and not queue.hasTarget then
 		displayName = tracker:GetActiveSeal()
 	end
@@ -910,6 +1030,51 @@ function UI:RefreshInner()
 				self.cooldown:Clear()
 			end
 			self.cooldown:Hide()
+		end
+	end
+
+	-- Mirror compact state onto the nameplate widget when active
+	if useNameplate and self.npFrame then
+		self.npMainIcon:SetTexture(mainTex)
+		self.npMainIcon:SetDesaturated(desaturate)
+		self.npMainIcon:SetAlpha(iconAlpha)
+		if queue.currentNoMana then
+			self.npMainIcon:SetVertexColor(0.50, 0.70, 1.0, 1)
+		else
+			self.npMainIcon:SetVertexColor(1, 1, 1, 1)
+		end
+
+		local borderCol = GOLD
+		if queue.currentIsInterrupt or warnSeal then
+			borderCol = WARN
+		elseif ready or queue.currentIsProc then
+			borderCol = READY
+		elseif queue.currentNoMana then
+			borderCol = OOM
+		end
+		self.npMainBorder:SetColorTexture(borderCol[1], borderCol[2], borderCol[3], 0.90)
+
+		UpdateKeybindPill(self.npMainKeyHolder, self.npMainKey, mainKeyText)
+		if nextTexture then
+			self.npNextIcon:SetTexture(nextTexture)
+			self.npNext:Show()
+			UpdateKeybindPill(self.npNextKeyHolder, self.npNextKey, nextKeyText)
+		else
+			self.npNext:Hide()
+		end
+
+		if appliedDurationObj and current and C_Spell and C_Spell.GetSpellCooldownDuration and self.npCooldown.SetCooldownFromDurationObject then
+			local okDur, durObj = pcall(C_Spell.GetSpellCooldownDuration, current, false)
+			if okDur and durObj ~= nil then
+				pcall(self.npCooldown.SetCooldownFromDurationObject, self.npCooldown, durObj, true)
+				self.npCooldown:Show()
+			end
+		elseif self.lastCdStart and self.lastCdDuration and self.lastCdDuration > 0 then
+			self.npCooldown:SetCooldown(self.lastCdStart, self.lastCdDuration)
+			self.npCooldown:Show()
+		else
+			self.npCooldown:Clear()
+			self.npCooldown:Hide()
 		end
 	end
 
