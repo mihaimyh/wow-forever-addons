@@ -86,6 +86,19 @@ function Config:OnInitialize()
 				if ui then ui:Refresh() end
 			end)
 
+		local npOffset = Settings.RegisterAddOnSetting(category, "RetPulse_NameplateOffsetX", "nameplateOffsetX", ns.db,
+			Settings.VarType.Number, "Nameplate X offset", -4)
+		self.settings["nameplateOffsetX"] = npOffset
+		local npOffsetOptions = Settings.CreateSliderOptions(-40, 40, 2)
+		if MinimalSliderWithSteppersMixin and MinimalSliderWithSteppersMixin.Label then
+			npOffsetOptions:SetLabelFormatter(MinimalSliderWithSteppersMixin.Label.Right)
+		end
+		Settings.CreateSlider(category, npOffset, npOffsetOptions, "Horizontal distance (px) from the target nameplate. Increase toward + to move closer.")
+		npOffset:SetValueChangedCallback(function()
+			local ui = ns:GetModule("UI")
+			if ui then ui:Refresh() end
+		end)
+
 		self:AddCheckbox(category, "RetPulse_ShowKeybinds", "showKeybinds",
 			"Show keybinds", "Display action-bar keybind badges on the main and next icons.", function()
 				local ui = ns:GetModule("UI")

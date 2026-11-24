@@ -882,11 +882,13 @@ function UI:RefreshInner()
 	if useNameplate then
 		self:SetDesiredVisible(false, true)
 		self:UpdateClickCast(nil)
-		if self.lastNpPlate ~= targetPlate then
+		local offsetX = tonumber(db.nameplateOffsetX) or -4
+		if self.lastNpPlate ~= targetPlate or self.lastNpOffsetX ~= offsetX then
 			self.lastNpPlate = targetPlate
+			self.lastNpOffsetX = offsetX
 			local anchor = self:GetNameplateAnchor(targetPlate) or targetPlate
 			self.npFrame:ClearAllPoints()
-			self.npFrame:SetPoint("RIGHT", anchor, "LEFT", -4, 0)
+			self.npFrame:SetPoint("RIGHT", anchor, "LEFT", offsetX, 0)
 		end
 		self.npFrame:SetScale(db.scale or 1.0)
 		self.npFrame:Show()
