@@ -2367,6 +2367,206 @@ Test("55. Boss burst prompt recommends Avenging Wrath or ready on-use trinket on
 	AssertEq(pq:Evaluate(), "Judgement", "suggestBurst=false must disable Boss burst prompt")
 end)
 
+Test("56. PvE isolation: NPC targets never trigger PvP stun combo, Freedom, Repentance gap-close, or Seal of Justice", function()
+	local c = CreateEnv({
+		inCombat = true,
+		targetClassification = "normal",
+		knownSpells = {
+			["Judgement"] = 20271,
+			["Holy Strike"] = 678,
+			["Hammer of Justice"] = 853,
+			["Seal of Command"] = 20375,
+			["Seal of Righteousness"] = 20288,
+			["Blessing of Freedom"] = 1044,
+			["Repentance"] = 20066,
+			["Seal of Justice"] = 20164,
+		},
+		usableSpells = {
+			["Judgement"] = true,
+			["Holy Strike"] = true,
+			["Hammer of Justice"] = true,
+			["Seal of Command"] = true,
+			["Seal of Righteousness"] = true,
+			["Blessing of Freedom"] = true,
+			["Repentance"] = true,
+			["Seal of Justice"] = true,
+		},
+	})
+	c.env.UnitIsPlayer = function() return false end
+	c.env.GetUnitSpeed = function() return 3.5 end
+	c.env.UnitClass = function(u) return u == "target" and "Druid" or "Paladin", u == "target" and "DRUID" or "PALADIN" end
+	c.Fire("UNIT_SPELLCAST_SUCCEEDED", "player", "sc", 20375)
+	c.Advance(1.6)
+
+	local pq = c.ns:GetModule("PriorityQueue")
+	AssertEq(pq:Evaluate(), "Judgement", "PvE target must go straight to Judgement, never HoJ stun combo or Freedom")
+	AssertEq(pq.currentIsPvp, false, "PvE evaluation must keep currentIsPvp=false")
+end)
+
+Test("57. Low-level PvP: hostile player triggers Seal of Command, Stun Combo, and Blessing of Freedom", function()
+	local swingRange = true
+	local speed = 7.0
+	local c = CreateEnv({
+		playerLevel = 24,
+		inCombat = true,
+		swingInRange = true,
+		knownSpells = {
+			["Judgement"] = 20271,
+			["Holy Strike"] = 678,
+			["Hammer of Justice"] = 853,
+			["Seal of Command"] = 20375,
+			["Seal of Righteousness"] = 20288,
+			["Blessing of Freedom"] = 1044,
+		},
+		usableSpells = {
+			["Judgement"] = true,
+			["Holy Strike"] = true,
+			["Hammer of Justice"] = true,
+			["Seal of Command"] = true,
+			["Seal of Righteousness"] = true,
+			["Blessing of Freedom"] = true,
+		},
+		inRangeSpells = {
+			["Judgement"] = true,
+			["Holy Strike"] = true,
+			["Hammer of Justice"] = true,
+		},
+	})
+	c.env.UnitIsPlayer = function(u) return u == "target" end
+	c.env.GetUnitSpeed = function() return speed end
+	c.env.C_SwingTimer.IsTargetWithinSwingRange = function() return swingRange end
+
+	local pq = c.ns:GetModule("PriorityQueue")
+	local cur, nxt = pq:Evaluate()
+	AssertEq(cur, "Seal of Command", "PvP target with no seal must open with Seal of Command (skipping Crusader)")
+
+	c.Fire("UNIT_SPELLCAST_SUCCEEDED", "player", "sc", 20375)
+	c.Advance(1.6)
+	cur, nxt = pq:Evaluate()
+	AssertEq(cur, "Hammer of Justice", "HoJ + Judgement + SoC ready on hostile player must recommend STUN COMBO!")
+	AssertEq(nxt, "Judgement", "NEXT must preview Judgement right after Hammer of Justice")
+	AssertEq(pq.currentPvpLabel, "STUN COMBO!", "Status label must be STUN COMBO!")
+
+	-- Slowed out of melee -> Blessing of Freedom!
+	swingRange = false
+	speed = 3.5
+	c.Advance(0.2)
+	cur = pq:Evaluate()
+	AssertEq(cur, "Blessing of Freedom", "Slowed out of melee in PvP must prioritize Blessing of Freedom")
+	AssertEq(pq.currentPvpLabel, "FREEDOM!", "Status label must be FREEDOM!")
+end)
+
+Test("58. Will of the Forsaken triggers BREAK CC! when C_LossOfControl reports active CC in PvP", function()
+	local ccCount = 0
+	local c = CreateEnv({
+		inCombat = true,
+		knownSpells = {
+			["Will of the Forsaken"] = 7744,
+			["Judgement"] = 20271,
+			["Seal of Righteousness"] = 20288,
+		},
+		usableSpells = {
+			["Will of the Forsaken"] = true,
+			["Judgement"] = true,
+			["Seal of Righteousness"] = true,
+		},
+	})
+	c.env.UnitIsPlayer = function(u) return u == "target" end
+	c.env.C_LossOfControl = {
+		GetActiveLossOfControlDataCount = function() return ccCount end,
+	}
+	c.Fire("UNIT_SPELLCAST_SUCCEEDED", "player", "sr", 20288)
+	c.Advance(1.6)
+
+	local pq = c.ns:GetModule("PriorityQueue")
+	AssertEq(pq:Evaluate(), "Judgement", "Without CC, Judgement runs normally")
+
+	ccCount = 1
+	AssertEq(pq:Evaluate(), "Will of the Forsaken", "Active CC in PvP must surface Will of the Forsaken")
+	AssertEq(pq.currentPvpLabel, "BREAK CC!", "Status label must be BREAK CC!")
+end)
+
+Test("59. Repentance acts as GAP CLOSE out of melee and 2nd INTERRUPT when HoJ is on CD", function()
+	local swingRange = false
+	local c = CreateEnv({
+		inCombat = true,
+		swingInRange = false,
+		knownSpells = {
+			["Judgement"] = 20271,
+			["Holy Strike"] = 678,
+			["Hammer of Justice"] = 853,
+			["Repentance"] = 20066,
+			["Seal of Command"] = 20375,
+		},
+		usableSpells = {
+			["Judgement"] = true,
+			["Holy Strike"] = true,
+			["Hammer of Justice"] = true,
+			["Repentance"] = true,
+			["Seal of Command"] = true,
+		},
+	})
+	c.env.UnitIsPlayer = function(u) return u == "target" end
+	c.env.C_SwingTimer.IsTargetWithinSwingRange = function() return swingRange end
+	c.env.C_Spell.IsSpellInRange = function(name)
+		if name == "Holy Strike" or name == "Hammer of Justice" then return false end
+		if name == "Repentance" then return true end
+		return false
+	end
+
+	c.Fire("UNIT_SPELLCAST_SUCCEEDED", "player", "sc", 20375)
+	c.Advance(1.6)
+
+	local pq = c.ns:GetModule("PriorityQueue")
+	AssertEq(pq:Evaluate(), "Repentance", "Out of melee/HoJ range on hostile player must recommend Repentance GAP CLOSE")
+	AssertEq(pq.currentPvpLabel, "GAP CLOSE", "Status label must be GAP CLOSE")
+
+	-- Casting player when HoJ is on CD/out of range -> Repentance acts as INTERRUPT
+	c.SetTargetCasting("Polymorph", false)
+	c.Fire("UNIT_SPELLCAST_START", "target", "e1", 118)
+	AssertEq(pq:Evaluate(), "Repentance", "Repentance must act as secondary interrupt when HoJ is unavailable")
+	AssertEq(pq.currentIsInterrupt, true, "Secondary Repentance interrupt must set currentIsInterrupt=true")
+end)
+
+Test("60. Seal of Justice anti-runner triggers when mobile enemy player escapes melee range", function()
+	local swingRange = true
+	local c = CreateEnv({
+		inCombat = true,
+		swingInRange = true,
+		knownSpells = {
+			["Judgement"] = 20271,
+			["Holy Strike"] = 678,
+			["Seal of Command"] = 20375,
+			["Seal of Justice"] = 20164,
+		},
+		usableSpells = {
+			["Judgement"] = true,
+			["Holy Strike"] = true,
+			["Seal of Command"] = true,
+			["Seal of Justice"] = true,
+		},
+	})
+	c.env.UnitIsPlayer = function(u) return u == "target" end
+	c.env.UnitClass = function(u) return u == "target" and "Druid" or "Paladin", u == "target" and "DRUID" or "PALADIN" end
+	c.env.C_SwingTimer.IsTargetWithinSwingRange = function() return swingRange end
+	c.env.C_Spell.IsSpellInRange = function(name)
+		if name == "Judgement" then return true end
+		return false
+	end
+
+	c.Fire("UNIT_SPELLCAST_SUCCEEDED", "player", "sc", 20375)
+	c.Advance(1.6)
+	local tracker = c.ns:GetModule("CombatTracker")
+	tracker:IsInSwingRange() -- records hadMeleeWithTarget=true while in melee
+
+	-- Druid shifts and runs out of melee (still in Judgement 10yd range)
+	swingRange = false
+	c.Advance(0.2)
+	local pq = c.ns:GetModule("PriorityQueue")
+	AssertEq(pq:Evaluate(), "Seal of Justice", "Escaping Druid must trigger Seal of Justice")
+	AssertEq(pq.currentPvpLabel, "STOP RUNNER", "Status label must be STOP RUNNER")
+end)
+
 print(string.format("\nResults: %d passed, %d failed", passed, failed))
 if failed > 0 then
 	os.exit(1)

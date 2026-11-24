@@ -1089,6 +1089,9 @@ function UI:RefreshInner()
 	elseif queue.currentIsInterrupt then
 		statusText = "INTERRUPT"
 		statusColor = WARN
+	elseif queue.currentPvpLabel then
+		statusText = queue.currentPvpLabel
+		statusColor = { 1.0, 0.35, 0.65 }
 	elseif ready then
 		statusText = "SWAP NOW"
 		statusColor = READY
@@ -1246,6 +1249,8 @@ function UI:RefreshInner()
 			borderCol = { 1.0, 0.28, 0.22 }
 		elseif queue.currentIsInterrupt or warnSeal then
 			borderCol = WARN
+		elseif queue.currentIsPvp then
+			borderCol = { 1.0, 0.35, 0.65 }
 		elseif queue.currentIsBurst then
 			borderCol = { 1.0, 0.72, 0.20 }
 		elseif ready or queue.currentIsProc then
@@ -1291,8 +1296,12 @@ function UI:RefreshInner()
 
 	if db.alertSounds ~= false and PlaySound and SOUNDKIT then
 		local fallbackKit = SOUNDKIT.IG_MAINMENU_OPTION_CHECKBOX_ON
+		local pvpUrgent = (queue.currentPvpLabel == "BREAK CC!" or queue.currentPvpLabel == "FREEDOM!")
 		if notFacing and not self.wasNotFacing then
 			local kit = SOUNDKIT.IG_MAINMENU_OPTION_CHECKBOX_OFF or fallbackKit
+			if kit then pcall(PlaySound, kit) end
+		elseif pvpUrgent and not self.wasPvpUrgent then
+			local kit = SOUNDKIT.READY_CHECK or fallbackKit
 			if kit then pcall(PlaySound, kit) end
 		elseif queue.currentIsInterrupt and not self.wasInterrupt then
 			local kit = SOUNDKIT.RAID_WARNING or SOUNDKIT.READY_CHECK or fallbackKit
@@ -1303,6 +1312,7 @@ function UI:RefreshInner()
 		end
 	end
 	self.wasNotFacing = notFacing
+	self.wasPvpUrgent = (queue.currentPvpLabel == "BREAK CC!" or queue.currentPvpLabel == "FREEDOM!")
 	self.wasInterrupt = queue.currentIsInterrupt == true
 	self.wasProc = queue.currentIsProc == true
 

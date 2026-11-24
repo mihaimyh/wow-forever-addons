@@ -86,6 +86,7 @@ function CombatTracker:OnLogin()
 		self.glowingSpells = {}
 		self.targetCasting = false
 		self.notFacingUntil = nil
+		self.hadMeleeWithTarget = false
 		if not InCombatLockdown() then
 			self.judgedCrusader = false
 		end
@@ -115,6 +116,7 @@ function CombatTracker:OnLogin()
 		self.targetRangeFromEvent = false
 		self.targetCasting = false
 		self.notFacingUntil = nil
+		self.hadMeleeWithTarget = false
 		if not InCombatLockdown() then
 			self.judgedCrusader = false
 		end
@@ -161,6 +163,9 @@ function CombatTracker:OnLogin()
 		self.targetInRange = isInRange and true or false
 		self.targetInRangeAt = GetTime()
 		self.targetRangeFromEvent = true
+		if self.targetInRange then
+			self.hadMeleeWithTarget = true
+		end
 	end)
 
 	self.activeNameplates = {}
@@ -188,6 +193,7 @@ function CombatTracker:Reset()
 	self.lastEchoAt = nil
 	self.lastSealAtSwing = nil
 	self.swingsWithSeal = 0
+	self.hadMeleeWithTarget = false
 	self:ResetSwing()
 end
 
@@ -227,6 +233,7 @@ function CombatTracker:OnSwing(duration, swingType)
 	self.lastSwingEventAt = now
 	self.swingAccepted = (self.swingAccepted or 0) + 1
 	self.notFacingUntil = nil
+	self.hadMeleeWithTarget = true
 
 	if ns.IsReadable(duration) then
 		self.swingStart = now
@@ -1024,6 +1031,9 @@ function CombatTracker:IsInSwingRange()
 		-- No answer: assume a target we can hit, the model is best-effort anyway.
 		self.targetInRange = UnitExists("target") and not UnitIsDead("target") or false
 	end
+	if self.targetInRange then
+		self.hadMeleeWithTarget = true
+	end
 	return self.targetInRange
 end
 
@@ -1229,6 +1239,54 @@ end
 function CombatTracker:IsNotFacing()
 	if ns.db and ns.db.facingAlert == false then return false end
 	return self.notFacingUntil ~= nil and GetTime() < self.notFacingUntil
+end
+
+function CombatTracker:IsPvpTarget()
+	if not UnitExists or not UnitExists("target") then return false end
+	if not UnitCanAttack or not UnitCanAttack("player", "target") then return false end
+	if not UnitIsPlayer then return false end
+	local ok, isPlayer = pcall(UnitIsPlayer, "target")
+	return ok and ns.IsReadable(isPlayer) and isPlayer == true or false
+end
+
+function CombatTracker:IsInBattleground()
+	if not IsInInstance then return false end
+	local ok, _, instanceType = pcall(IsInInstance)
+	if not ok or not ns.IsReadable(instanceType) then return false end
+	return instanceType == "pvp" or instanceType == "arena"
+end
+
+function CombatTracker:HasActiveCC()
+	if C_LossOfControl and C_LossOfControl.GetActiveLossOfControlDataCount then
+		local ok, count = pcall(C_LossOfControl.GetActiveLossOfControlDataCount)
+		if ok and ns.IsReadable(count) and type(count) == "number" and count > 0 then
+			return true
+		end
+	end
+	return false
+end
+
+function CombatTracker:IsPlayerSlowedOrRooted()
+	if C_LossOfControl and C_LossOfControl.GetActiveLossOfControlDataCount and C_LossOfControl.GetActiveLossOfControlData then
+		local okC, count = pcall(C_LossOfControl.GetActiveLossOfControlDataCount)
+		if okC and ns.IsReadable(count) and type(count) == "number" and count > 0 then
+			for i = 1, count do
+				local okD, data = pcall(C_LossOfControl.GetActiveLossOfControlData, i)
+				if okD and type(data) == "table" and not ns.IsSecret(data) and ns.IsReadable(data.locType) then
+					if data.locType == "ROOT" or data.locType == "SNARE" then
+						return true
+					end
+				end
+			end
+		end
+	end
+	if GetUnitSpeed then
+		local okS, speed = pcall(GetUnitSpeed, "player")
+		if okS and ns.IsReadable(speed) and type(speed) == "number" and speed > 0 and speed < 6.5 then
+			return true
+		end
+	end
+	return false
 end
 
 function CombatTracker:DebugLine()

@@ -2,7 +2,7 @@
 ## Title: RetPulse
 ## Notes: Retribution Paladin rotation advisor and Unsealed Wrath echo tracker for WoW: Forever.
 ## Author: mdumi
-## Version: 1.9.0
+## Version: 2.0.0
 ## X-Curse-Project-ID: 1822620
 ## SavedVariables: RetPulseDB
 ## IconTexture: Interface\Icons\Spell_Holy_SealOfWisdom

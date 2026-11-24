@@ -242,6 +242,27 @@ function Config:OnInitialize()
 			"Crusader opener: Boss only", "Skip dungeon trash elites and only use Seal of the Crusader opener on worldbosses.")
 
 		-----------------------------------------------------------------------
+		-- Subcategory 1b: PvP
+		-----------------------------------------------------------------------
+		local pvpCat, pvpLayout = MakeSubcategory("PvP")
+		AddSection(pvpLayout, "PvP Intelligence (Hostile Players Only)")
+
+		self:AddCheckbox(pvpCat, "RetPulse_PvpEnabled", "pvpEnabled",
+			"Enable PvP mode", "Activates smart PvP rotation and alerts only against hostile players or in Battlegrounds. Never affects PvE.")
+
+		self:AddCheckbox(pvpCat, "RetPulse_PvpStunCombo", "pvpStunCombo",
+			"Stun burst combo (HoJ -> Judgement)", "Suggests Hammer of Justice before Judgement of Command for double damage on stunned players.")
+
+		self:AddCheckbox(pvpCat, "RetPulse_PvpCcBreaker", "pvpCcBreaker",
+			"CC breaker (Will of the Forsaken / Freedom)", "Suggests Will of the Forsaken when CC'd and Blessing of Freedom when slowed/rooted out of melee.")
+
+		self:AddCheckbox(pvpCat, "RetPulse_PvpGapCloser", "pvpGapCloser",
+			"Gap closer & 2nd interrupt (Repentance)", "Uses Repentance at range to stop fleeing players or interrupt casts when Hammer of Justice is unavailable.")
+
+		self:AddCheckbox(pvpCat, "RetPulse_PvpAntiRunner", "pvpAntiRunner",
+			"Anti-runner (Seal of Justice)", "Swaps to Seal of Justice + Judgement when a mobile enemy player (Druid/Shaman/Hunter/Rogue) escapes melee.")
+
+		-----------------------------------------------------------------------
 		-- Subcategory 2: Buffs & Talents
 		-----------------------------------------------------------------------
 		local buffCat, buffLayout = MakeSubcategory("Buffs & Talents")

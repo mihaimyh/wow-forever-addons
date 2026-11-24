@@ -60,6 +60,9 @@ local BASE_COOLDOWN = {
 	["Avenging Wrath"] = 180,
 	["Blood Fury"] = 120,
 	["Berserking"] = 180,
+	["Blessing of Freedom"] = 25,
+	["Repentance"] = 60,
+	["Will of the Forsaken"] = 120,
 }
 
 -- Judgement and major offensive cooldowns are off the global cooldown.
@@ -69,6 +72,7 @@ local OFF_GCD = {
 	["Avenging Wrath"] = true,
 	["Blood Fury"] = true,
 	["Berserking"] = true,
+	["Will of the Forsaken"] = true,
 }
 local GCD_SPELLS = {
 	["Holy Strike"] = true,
@@ -81,6 +85,8 @@ local GCD_SPELLS = {
 	["Blessing of Kings"] = true,
 	["Blessing of Might"] = true,
 	["Blessing of Wisdom"] = true,
+	["Blessing of Freedom"] = true,
+	["Repentance"] = true,
 }
 
 function PriorityQueue:OnLogin()
@@ -318,6 +324,15 @@ function PriorityQueue:Evaluate()
 	local echoes = tracker:GetEchoes()
 	local swingsWithSeal = tracker:GetSwingsWithSeal()
 
+	local isPvpTarget = tracker and tracker.IsPvpTarget and tracker:IsPvpTarget() or false
+	local inBg = tracker and tracker.IsInBattleground and tracker:IsInBattleground() or false
+	local pvpActive = (db.pvpEnabled ~= false) and isPvpTarget
+	local pvpContext = (db.pvpEnabled ~= false) and (isPvpTarget or inBg)
+
+	if pvpActive and IsKnown(ns.SPELLS.SEAL_COMMAND) then
+		primaryName = ns.SPELLS.SEAL_COMMAND
+	end
+
 	local hasTarget = UnitExists("target") and UnitCanAttack("player", "target")
 	local creatureType = hasTarget and UnitCreatureType("target") or nil
 	if creatureType ~= nil and ns.IsSecret(creatureType) then creatureType = nil end
@@ -337,7 +352,25 @@ function PriorityQueue:Evaluate()
 			isProc = meta and meta.isProc or false,
 			isInterrupt = meta and meta.isInterrupt or false,
 			isBurst = meta and meta.isBurst or false,
+			isPvp = meta and meta.isPvp or false,
+			pvpLabel = meta and meta.pvpLabel or nil,
 		}
+	end
+
+	-- -2. PvP CC Breaker: Will of the Forsaken on active CC, or Blessing of Freedom
+	--     when slowed/rooted outside melee range (strictly gated to PvP/BG).
+	if pvpContext and (db.pvpCcBreaker ~= false) then
+		if tracker and tracker.HasActiveCC and tracker:HasActiveCC()
+			and IsKnown(ns.SPELLS.WILL_OF_FORSAKEN) and IsUsable(ns.SPELLS.WILL_OF_FORSAKEN)
+			and self:IsReady(ns.SPELLS.WILL_OF_FORSAKEN) then
+			Add(ns.SPELLS.WILL_OF_FORSAKEN, false, { isPvp = true, pvpLabel = "BREAK CC!" })
+		end
+		if hasTarget and gcdReady and tracker and tracker.IsPlayerSlowedOrRooted and tracker:IsPlayerSlowedOrRooted()
+			and (not tracker:IsInSwingRange())
+			and IsKnown(ns.SPELLS.BLESSING_FREEDOM) and IsUsable(ns.SPELLS.BLESSING_FREEDOM)
+			and self:IsReady(ns.SPELLS.BLESSING_FREEDOM) then
+			Add(ns.SPELLS.BLESSING_FREEDOM, false, { isPvp = true, pvpLabel = "FREEDOM!" })
+		end
 	end
 
 	local function FindReadyTrinketSpell()
@@ -363,22 +396,31 @@ function PriorityQueue:Evaluate()
 
 	-- -1. Interrupt: if the target is casting an interruptible spell and
 	--     Hammer of Justice is ready & in range, prioritize the interrupt.
+	--     In PvP, fall back to Repentance (20yd) if HoJ is unavailable.
+	local addedInterrupt = false
 	if hasTarget and (db.suggestInterrupt ~= false) and gcdReady
-		and tracker and tracker.IsTargetCastingInterruptible and tracker:IsTargetCastingInterruptible()
-		and IsKnown(ns.SPELLS.HAMMER_OF_JUSTICE) and IsUsable(ns.SPELLS.HAMMER_OF_JUSTICE)
-		and self:IsReady(ns.SPELLS.HAMMER_OF_JUSTICE) and InRange(ns.SPELLS.HAMMER_OF_JUSTICE) then
-		Add(ns.SPELLS.HAMMER_OF_JUSTICE, true, { isInterrupt = true })
+		and tracker and tracker.IsTargetCastingInterruptible and tracker:IsTargetCastingInterruptible() then
+		if IsKnown(ns.SPELLS.HAMMER_OF_JUSTICE) and IsUsable(ns.SPELLS.HAMMER_OF_JUSTICE)
+			and self:IsReady(ns.SPELLS.HAMMER_OF_JUSTICE) and InRange(ns.SPELLS.HAMMER_OF_JUSTICE) then
+			Add(ns.SPELLS.HAMMER_OF_JUSTICE, true, { isInterrupt = true })
+			addedInterrupt = true
+		elseif pvpActive and (db.pvpGapCloser ~= false)
+			and IsKnown(ns.SPELLS.REPENTANCE) and IsUsable(ns.SPELLS.REPENTANCE)
+			and self:IsReady(ns.SPELLS.REPENTANCE) and InRange(ns.SPELLS.REPENTANCE) then
+			Add(ns.SPELLS.REPENTANCE, true, { isInterrupt = true, isPvp = true })
+			addedInterrupt = true
+		end
 	end
 
 	-- Detect low mana in combat via insufficientPower on Consecration (our
 	-- costliest spell), since UnitPower() is secret in combat.
 	local lowMana = (db.manaSaver ~= false) and IsKnown(ns.SPELLS.CONSECRATION) and IsNoMana(ns.SPELLS.CONSECRATION)
 
-	-- 0a. Boss / Elite opener: apply Judgement of the Crusader once per pull.
+	-- 0a. Boss / Elite opener: apply Judgement of the Crusader once per pull (PvE only).
 	local cls = hasTarget and UnitClassification and UnitClassification("target") or nil
 	if cls ~= nil and ns.IsSecret(cls) then cls = nil end
 	local isBossOrElite = (cls == "worldboss") or (not db.crusaderBossOnly and (cls == "elite" or cls == "rareelite"))
-	local needCrusader = hasTarget and (db.crusaderOnBoss ~= false) and isBossOrElite
+	local needCrusader = hasTarget and (not pvpActive) and (db.crusaderOnBoss ~= false) and isBossOrElite
 		and (not lowMana or activeSeal == ns.SPELLS.SEAL_CRUSADER)
 		and tracker and tracker.HasJudgedCrusader and not tracker:HasJudgedCrusader()
 		and IsKnown(ns.SPELLS.SEAL_CRUSADER) and IsUsable(ns.SPELLS.SEAL_CRUSADER)
@@ -405,8 +447,8 @@ function PriorityQueue:Evaluate()
 		Add(secondaryName, false)
 	end
 
-	-- 1.2. Boss Burst: major offensive cooldowns or ready on-use trinkets on worldbosses.
-	if hasTarget and InCombatLockdown() and (db.suggestBurst ~= false) and cls == "worldboss" and activeSeal ~= nil then
+	-- 1.2. Boss / PvP Burst: major offensive cooldowns or ready on-use trinkets.
+	if hasTarget and InCombatLockdown() and (db.suggestBurst ~= false) and (cls == "worldboss" or pvpActive) and activeSeal ~= nil then
 		local burstSpells = {
 			ns.SPELLS.AVENGING_WRATH,
 			ns.SPELLS.BLOOD_FURY,
@@ -425,6 +467,27 @@ function PriorityQueue:Evaluate()
 			if trinketSpell then
 				Add(trinketSpell, false, { isBurst = true })
 			end
+		end
+	end
+
+	-- 1.3. PvP Anti-Runner & Gap-Closer (only when hostile player escapes melee).
+	if pvpActive and hasTarget and not tracker:IsInSwingRange() then
+		if (db.pvpAntiRunner ~= false) and InCombatLockdown() and tracker.hadMeleeWithTarget and InRange(ns.SPELLS.JUDGEMENT) then
+			local mobileClasses = { DRUID = true, SHAMAN = true, HUNTER = true, ROGUE = true }
+			local okC, _, tClass = pcall(UnitClass, "target")
+			if okC and ns.IsReadable(tClass) and mobileClasses[tClass] then
+				if activeSeal == ns.SPELLS.SEAL_JUSTICE and IsUsable(ns.SPELLS.JUDGEMENT) and self:IsReady(ns.SPELLS.JUDGEMENT) then
+					Add(ns.SPELLS.JUDGEMENT, true, { isPvp = true, pvpLabel = "STOP RUNNER" })
+				elseif activeSeal ~= ns.SPELLS.SEAL_JUSTICE and gcdReady and IsKnown(ns.SPELLS.SEAL_JUSTICE) and IsUsable(ns.SPELLS.SEAL_JUSTICE) then
+					Add(ns.SPELLS.SEAL_JUSTICE, false, { isPvp = true, pvpLabel = "STOP RUNNER" })
+				end
+			end
+		end
+
+		if (db.pvpGapCloser ~= false) and gcdReady and not addedInterrupt
+			and IsKnown(ns.SPELLS.REPENTANCE) and IsUsable(ns.SPELLS.REPENTANCE)
+			and self:IsReady(ns.SPELLS.REPENTANCE) and InRange(ns.SPELLS.REPENTANCE) then
+			Add(ns.SPELLS.REPENTANCE, true, { isPvp = true, pvpLabel = "GAP CLOSE" })
 		end
 	end
 
@@ -447,6 +510,15 @@ function PriorityQueue:Evaluate()
 				Add(spellName, true, { isProc = true })
 			end
 		end
+	end
+
+	-- 1.9. PvP Stun Burst Combo: Hammer of Justice -> Judgement of Command (double damage).
+	if pvpActive and (db.pvpStunCombo ~= false) and hasTarget and gcdReady and activeSeal == ns.SPELLS.SEAL_COMMAND
+		and IsKnown(ns.SPELLS.HAMMER_OF_JUSTICE) and IsUsable(ns.SPELLS.HAMMER_OF_JUSTICE)
+		and self:IsReady(ns.SPELLS.HAMMER_OF_JUSTICE) and InRange(ns.SPELLS.HAMMER_OF_JUSTICE)
+		and IsKnown(ns.SPELLS.JUDGEMENT) and IsUsable(ns.SPELLS.JUDGEMENT)
+		and self:IsReady(ns.SPELLS.JUDGEMENT) then
+		Add(ns.SPELLS.HAMMER_OF_JUSTICE, true, { isPvp = true, pvpLabel = "STUN COMBO!" })
 	end
 
 	-- 2. Judgement. Never while Seal of Fury is up: its Judgement is a taunt.
@@ -593,6 +665,8 @@ function PriorityQueue:Evaluate()
 	self.currentIsProc = current and current.isProc == true or false
 	self.currentIsInterrupt = current and current.isInterrupt == true or false
 	self.currentIsBurst = current and current.isBurst == true or false
+	self.currentIsPvp = current and current.isPvp == true or false
+	self.currentPvpLabel = current and current.pvpLabel or nil
 	self.hasTarget = hasTarget and true or false
 
 	return self.current, self.next

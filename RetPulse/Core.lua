@@ -35,6 +35,10 @@ ns.SPELLS = {
 	AVENGING_WRATH  = "Avenging Wrath",
 	BLOOD_FURY      = "Blood Fury",
 	BERSERKING      = "Berserking",
+	BLESSING_FREEDOM = "Blessing of Freedom",
+	REPENTANCE      = "Repentance",
+	SEAL_JUSTICE    = "Seal of Justice",
+	WILL_OF_FORSAKEN = "Will of the Forsaken",
 }
 
 -------------------------------------------------------------------------------
@@ -52,6 +56,11 @@ local DEFAULTS = {
 	suggestInterrupt = true, -- suggest Hammer of Justice when target casts an interruptible spell
 	facingAlert = true,      -- show FACE TARGET alert when melee/cast fails due to wrong facing
 	suggestBurst = true,     -- suggest Avenging Wrath / racials / on-use trinkets on worldboss
+	pvpEnabled = true,       -- PvP intelligence against hostile players / in Battlegrounds (zero effect on PvE)
+	pvpStunCombo = true,     -- HoJ -> Judgement of Command double-damage combo on players
+	pvpCcBreaker = true,     -- Will of the Forsaken on CC + Blessing of Freedom when slowed/rooted out of melee
+	pvpGapCloser = true,     -- Repentance at range to close gap or secondary interrupt on casting players
+	pvpAntiRunner = true,    -- Seal of Justice -> Judgement when a mobile enemy player escapes melee
 	crusaderOnBoss = true,   -- recommend Seal of the Crusader opener on Elites/Bosses
 	crusaderBossOnly = false, -- limit Crusader opener to worldbosses (skip dungeon trash elites)
 	talentAdvisor = true,    -- highlight RetPulse talents on PlayerSpellsFrame.TalentsFrame
