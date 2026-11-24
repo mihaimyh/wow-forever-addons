@@ -2152,6 +2152,221 @@ Test("49. Facing alert triggers on UI_ERROR_MESSAGE and clears on swing, cast, t
 	AssertEq(tracker:IsNotFacing(), false, "Facing alert expires after 2 seconds")
 end)
 
+Test("50. Nameplate mode renders mini swing bar and 3 Echo pips when enabled", function()
+	local plate = { IsForbidden = function() return false end, IsVisible = function() return true end, SetPoint = function() end }
+	local c = CreateEnv({
+		inCombat = true,
+		knownSpells = { ["Judgement"] = 20271, ["Holy Strike"] = 678, ["Seal of Righteousness"] = 20288 },
+		usableSpells = { ["Judgement"] = true, ["Holy Strike"] = true, ["Seal of Righteousness"] = true },
+	})
+	c.env.C_NamePlate.GetNamePlateForUnit = function() return plate end
+	c.ns.db.nameplateMode = true
+	c.ns.db.nameplateBars = true
+	c.ns.db.twistWithoutTalent = true
+
+	local tracker = c.ns:GetModule("CombatTracker")
+	c.Fire("UNIT_SPELLCAST_SUCCEEDED", "player", "s1", 20288)
+	c.Fire("PLAYER_SWING", 3.0, 0)
+	tracker.echoes = 2
+	c.Advance(1.5)
+
+	local ui = c.ns:GetModule("UI")
+	ui:Refresh()
+	Assert(ui.npSwingBar ~= nil, "Nameplate swing bar must exist")
+	AssertEq(ui.npSwingBar:IsShown(), true, "Nameplate swing bar must show in combat")
+	Assert(ui.npPips ~= nil and #ui.npPips == 3, "Nameplate must have 3 echo pips")
+	AssertEq(ui.npPips[1]:IsShown(), true, "Echo pips must show when Unsealed Wrath / twist is active")
+
+	c.ns.db.nameplateBars = false
+	ui:Refresh()
+	AssertEq(ui.npSwingBar:IsShown(), false, "Disabling nameplateBars must hide nameplate swing bar")
+	AssertEq(ui.npPips[1]:IsShown(), false, "Disabling nameplateBars must hide nameplate echo pips")
+end)
+
+Test("51. Early Blessing refresh (<60s) and Greater Blessing preference in raid", function()
+	local now = 1000
+	local c = CreateEnv({
+		now = now,
+		inCombat = false,
+		targetExists = false,
+		knownSpells = {
+			["Blessing of Kings"] = 20217,
+			["Greater Blessing of Kings"] = 25898,
+			["Retribution Aura"] = 7294,
+		},
+		usableSpells = {
+			["Blessing of Kings"] = true,
+			["Greater Blessing of Kings"] = true,
+			["Retribution Aura"] = true,
+		},
+		playerAuras = {
+			{ name = "Blessing of Kings", spellId = 20217, sourceUnit = "player", expirationTime = now + 45 },
+			{ name = "Retribution Aura", spellId = 7294, sourceUnit = "player", expirationTime = 0 },
+		},
+	})
+	c.env.IsInRaid = function() return true end
+	local tracker = c.ns:GetModule("CombatTracker")
+	tracker:RefreshSeal()
+
+	AssertEq(tracker:GetMissingBlessing(), "Greater Blessing of Kings", "Expiring blessing (<60s) in raid should suggest Greater Blessing")
+
+	c.env.C_Spell.IsSpellUsable = function(name)
+		if name == "Greater Blessing of Kings" then return false, false end
+		return true, false
+	end
+	AssertEq(tracker:GetMissingBlessing(), "Blessing of Kings", "Unusable Greater Blessing falls back to regular Blessing")
+
+	c.ns.db.buffRefreshEarly = false
+	AssertEq(tracker:GetMissingBlessing(), nil, "Disabling buffRefreshEarly suppresses reminder while buff is still active")
+end)
+
+Test("52. Alert sounds fire once per rising edge for FACE!, INTERRUPT, and PROC!, and respect alertSounds=false", function()
+	local played = {}
+	local c = CreateEnv({
+		inCombat = true,
+		knownSpells = { ["Judgement"] = 20271, ["Holy Strike"] = 678, ["Hammer of Justice"] = 853, ["Seal of Righteousness"] = 20288 },
+		usableSpells = { ["Judgement"] = true, ["Holy Strike"] = true, ["Hammer of Justice"] = true, ["Seal of Righteousness"] = true },
+	})
+	c.env.PlaySound = function(kit) played[#played + 1] = kit end
+	c.env.SOUNDKIT.RAID_WARNING = 8959
+	c.env.SOUNDKIT.READY_CHECK = 8960
+	c.env.SOUNDKIT.IG_MAINMENU_OPTION_CHECKBOX_OFF = 857
+
+	local ui = c.ns:GetModule("UI")
+	c.Fire("UNIT_SPELLCAST_SUCCEEDED", "player", "s1", 20288)
+	c.Advance(1.6)
+	ui:Refresh()
+	local before = #played
+
+	c.Fire("UI_ERROR_MESSAGE", 1, "You are facing the wrong way!")
+	ui:Refresh()
+	ui:Refresh()
+	AssertEq(#played, before + 1, "Facing alert sound must fire once per rising edge")
+
+	c.ns.db.alertSounds = false
+	c.SetTargetCasting("Fireball", false)
+	c.Fire("UNIT_SPELLCAST_START", "target", "e1", 133)
+	ui:Refresh()
+	AssertEq(#played, before + 1, "alertSounds=false must suppress interrupt alert sound")
+end)
+
+Test("53. Out-of-combat Dispel reminder surfaces Cleanse/Purify for harmful debuffs and arms click-to-cast", function()
+	local partyHarmful = {
+		party1 = { { name = "Venom Spit", spellId = 6917, dispelName = "Poison" } },
+	}
+	local c = CreateEnv({
+		inCombat = false,
+		targetExists = false,
+		knownSpells = {
+			["Purify"] = 1152,
+			["Blessing of Kings"] = 20217,
+			["Retribution Aura"] = 7294,
+		},
+		playerAuras = {
+			{ name = "Blessing of Kings", spellId = 20217, sourceUnit = "player", expirationTime = 4000 },
+			{ name = "Retribution Aura", spellId = 7294, sourceUnit = "player", expirationTime = 0 },
+		},
+	})
+	c.env.IsInGroup = function() return true end
+	c.env.IsInRaid = function() return false end
+	c.env.GetNumGroupMembers = function() return 2 end
+	c.env.UnitExists = function(u) return u == "party1" end
+	c.env.UnitIsConnected = function() return true end
+	c.env.UnitIsDeadOrGhost = function() return false end
+	c.env.UnitIsUnit = function(a, b) return a == b end
+	c.env.UnitName = function(u) return u == "party1" and "Thrall" or u end
+	c.env.C_Spell.IsSpellInRange = function(_, u) return u == "party1" end
+	c.env.C_UnitAuras.GetAuraDataByIndex = function(u, idx, filter)
+		if filter == "HARMFUL" then
+			return partyHarmful[u] and partyHarmful[u][idx] or nil
+		end
+		if u == "player" then
+			return (idx == 1 and { name = "Blessing of Kings", spellId = 20217, sourceUnit = "player", expirationTime = 4000 })
+				or (idx == 2 and { name = "Retribution Aura", spellId = 7294, sourceUnit = "player", expirationTime = 0 })
+				or nil
+		end
+		return nil
+	end
+
+	local tracker = c.ns:GetModule("CombatTracker")
+	tracker:RefreshSeal()
+	local spell, unit, unitName = tracker:GetMissingDispel()
+	AssertEq(spell, "Purify", "Poison on party1 should suggest Purify")
+	AssertEq(unit, "party1", "Dispel target must be party1")
+	AssertEq(unitName, "Thrall", "Dispel target name must be Thrall")
+
+	local ui = c.ns:GetModule("UI")
+	local attrs = {}
+	ui.clickBtn.SetAttribute = function(_, k, v) attrs[k] = v end
+	ui:Refresh()
+	AssertEq(attrs.spell, "Purify", "Click-to-cast must arm Purify")
+	AssertEq(attrs.unit, "party1", "Click-to-cast must target party1")
+	AssertEq(ui.status:GetText(), "DISPEL: Thrall", "HUD status must show DISPEL: Thrall")
+
+	partyHarmful.party1 = { { name = "Polymorph", spellId = 118, dispelName = "Magic" } }
+	AssertEq(tracker:GetMissingDispel(), nil, "Purify alone must not suggest dispelling Magic")
+end)
+
+Test("54. Righteous Fury anti-aggro warning triggers in group for DPS and stays silent for Tanks", function()
+	local role = "DAMAGER"
+	local c = CreateEnv({
+		inCombat = false,
+		targetExists = false,
+		knownSpells = { ["Blessing of Kings"] = 20217, ["Retribution Aura"] = 7294 },
+		playerAuras = {
+			{ name = "Righteous Fury", spellId = 25780, sourceUnit = "player", expirationTime = 4000 },
+			{ name = "Blessing of Kings", spellId = 20217, sourceUnit = "player", expirationTime = 4000 },
+			{ name = "Retribution Aura", spellId = 7294, sourceUnit = "player", expirationTime = 0 },
+		},
+	})
+	c.env.IsInGroup = function() return true end
+	c.env.UnitGroupRolesAssigned = function() return role end
+
+	local tracker = c.ns:GetModule("CombatTracker")
+	tracker:RefreshSeal()
+	AssertEq(tracker:GetThreatBuffWarning(), "Righteous Fury", "DPS in group with Righteous Fury must be warned")
+
+	local ui = c.ns:GetModule("UI")
+	ui:Refresh()
+	AssertEq(ui.status:GetText(), "THREAT BUFF ON!", "HUD status must show THREAT BUFF ON!")
+
+	role = "TANK"
+	AssertEq(tracker:GetThreatBuffWarning(), nil, "Assigned Tank must not be warned about Righteous Fury")
+end)
+
+Test("55. Boss burst prompt recommends Avenging Wrath or ready on-use trinket on worldboss only", function()
+	local c = CreateEnv({
+		inCombat = true,
+		targetClassification = "worldboss",
+		knownSpells = {
+			["Judgement"] = 20271,
+			["Holy Strike"] = 678,
+			["Seal of Righteousness"] = 20288,
+			["Avenging Wrath"] = 31884,
+		},
+		usableSpells = {
+			["Judgement"] = true,
+			["Holy Strike"] = true,
+			["Seal of Righteousness"] = true,
+			["Avenging Wrath"] = true,
+		},
+	})
+	c.ns.db.crusaderOnBoss = false
+	c.Fire("UNIT_SPELLCAST_SUCCEEDED", "player", "s1", 20288)
+	c.Advance(1.6)
+
+	local pq = c.ns:GetModule("PriorityQueue")
+	AssertEq(pq:Evaluate(), "Avenging Wrath", "Ready Avenging Wrath should surface as BURST! on worldboss")
+	AssertEq(pq.currentIsBurst, true, "PriorityQueue must set currentIsBurst=true")
+
+	c.SetTargetClassification("normal")
+	AssertEq(pq:Evaluate(), "Judgement", "Burst cooldown must not be recommended on normal mobs")
+
+	c.SetTargetClassification("worldboss")
+	c.ns.db.suggestBurst = false
+	AssertEq(pq:Evaluate(), "Judgement", "suggestBurst=false must disable Boss burst prompt")
+end)
+
 print(string.format("\nResults: %d passed, %d failed", passed, failed))
 if failed > 0 then
 	os.exit(1)

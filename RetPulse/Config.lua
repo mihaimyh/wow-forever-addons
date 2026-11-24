@@ -86,6 +86,12 @@ function Config:OnInitialize()
 				if ui then ui:Refresh() end
 			end)
 
+		self:AddCheckbox(category, "RetPulse_NameplateBars", "nameplateBars",
+			"Nameplate swing bar & echoes", "Show a mini swing bar and 3 Echo pips on the compact nameplate widget.", function()
+				local ui = ns:GetModule("UI")
+				if ui then ui:Refresh() end
+			end)
+
 		local npOffset = Settings.RegisterAddOnSetting(category, "RetPulse_NameplateOffsetX", "nameplateOffsetX", ns.db,
 			Settings.VarType.Number, "Nameplate X offset", -4)
 		self.settings["nameplateOffsetX"] = npOffset
@@ -123,6 +129,9 @@ function Config:OnInitialize()
 
 		self:AddCheckbox(category, "RetPulse_Sound", "sound",
 			"SWAP NOW sound", "Soft click when echoes hit cap and it is time to twist.")
+
+		self:AddCheckbox(category, "RetPulse_AlertSounds", "alertSounds",
+			"Alert sounds (Interrupt / Proc / Face)", "Play subtle audio cues on FACE!, INTERRUPT, and PROC! alerts.")
 
 		local scale = Settings.RegisterAddOnSetting(category, "RetPulse_Scale", "scale", ns.db,
 			Settings.VarType.Number, "Scale", 1.0)
@@ -223,6 +232,9 @@ function Config:OnInitialize()
 		self:AddCheckbox(rotCat, "RetPulse_FacingAlert", "facingAlert",
 			"Facing target alert", "Show FACE TARGET / FACE! warning when an attack or spell fails because you are not facing your target.")
 
+		self:AddCheckbox(rotCat, "RetPulse_SuggestBurst", "suggestBurst",
+			"Burst cooldowns on Boss", "Suggest ready Avenging Wrath, offensive racials, or on-use trinkets on worldboss targets.")
+
 		self:AddCheckbox(rotCat, "RetPulse_CrusaderBoss", "crusaderOnBoss",
 			"Crusader opener on Boss/Elite", "Recommend Seal of the Crusader + Judgement once per Boss/Elite pull.")
 
@@ -262,6 +274,30 @@ function Config:OnInitialize()
 
 		self:AddCheckbox(buffCat, "RetPulse_RemindGroupBlessings", "remindGroupBlessings",
 			"Buff party/raid & friendly target", "Remind out of combat to cast the best missing Blessing on party/raid members or your friendly player target (click icon to cast).", function()
+				local ui = ns:GetModule("UI")
+				if ui then ui:Refresh() end
+			end)
+
+		self:AddCheckbox(buffCat, "RetPulse_BuffRefreshEarly", "buffRefreshEarly",
+			"Refresh blessings early (< 60s)", "Remind out of combat to refresh your Blessings when less than 60 seconds remain.", function()
+				local ui = ns:GetModule("UI")
+				if ui then ui:Refresh() end
+			end)
+
+		self:AddCheckbox(buffCat, "RetPulse_PreferGreaterBlessings", "preferGreaterBlessings",
+			"Prefer Greater Blessings in raid", "Suggest Greater Blessings in raids when learned and usable (falls back to regular if out of reagents).", function()
+				local ui = ns:GetModule("UI")
+				if ui then ui:Refresh() end
+			end)
+
+		self:AddCheckbox(buffCat, "RetPulse_RemindDispel", "remindDispel",
+			"Dispel reminder (Purify / Cleanse)", "Remind out of combat to cleanse lingering Poison, Disease, or Magic debuffs on you, your target, or group (click to cast).", function()
+				local ui = ns:GetModule("UI")
+				if ui then ui:Refresh() end
+			end)
+
+		self:AddCheckbox(buffCat, "RetPulse_WarnRighteousFury", "warnRighteousFury",
+			"Warn Righteous Fury in group", "Warn out of combat if Righteous Fury is active while you are not assigned as Tank.", function()
 				local ui = ns:GetModule("UI")
 				if ui then ui:Refresh() end
 			end)

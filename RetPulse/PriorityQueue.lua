@@ -57,11 +57,19 @@ local BASE_COOLDOWN = {
 	["Consecration"] = 8,
 	["Holy Shock"] = 30,
 	["Holy Wrath"] = 60,
+	["Avenging Wrath"] = 180,
+	["Blood Fury"] = 120,
+	["Berserking"] = 180,
 }
 
--- Judgement is off the global cooldown in Forever, so it never blocks the queue.
+-- Judgement and major offensive cooldowns are off the global cooldown.
 local GCD = 1.5
-local OFF_GCD = { ["Judgement"] = true }
+local OFF_GCD = {
+	["Judgement"] = true,
+	["Avenging Wrath"] = true,
+	["Blood Fury"] = true,
+	["Berserking"] = true,
+}
 local GCD_SPELLS = {
 	["Holy Strike"] = true,
 	["Exorcism"] = true,
@@ -328,7 +336,29 @@ function PriorityQueue:Evaluate()
 			inRange = inRange,
 			isProc = meta and meta.isProc or false,
 			isInterrupt = meta and meta.isInterrupt or false,
+			isBurst = meta and meta.isBurst or false,
 		}
+	end
+
+	local function FindReadyTrinketSpell()
+		if not GetInventoryItemID or not C_Item or not C_Item.GetItemSpell or not C_Item.GetItemCooldown then
+			return nil
+		end
+		for _, slot in ipairs({ 13, 14 }) do
+			local okI, itemID = pcall(GetInventoryItemID, "player", slot)
+			if okI and type(itemID) == "number" and not ns.IsSecret(itemID) then
+				local okS, spellName = pcall(C_Item.GetItemSpell, itemID)
+				if okS and type(spellName) == "string" and not ns.IsSecret(spellName) then
+					local okC, start, duration, enable = pcall(C_Item.GetItemCooldown, itemID)
+					if okC and ns.IsReadable(start) and ns.IsReadable(duration) and (enable == true or enable == 1) then
+						if start == 0 or duration == 0 or (start + duration - GetTime()) <= 0.2 then
+							return spellName
+						end
+					end
+				end
+			end
+		end
+		return nil
 	end
 
 	-- -1. Interrupt: if the target is casting an interruptible spell and
@@ -373,6 +403,29 @@ function PriorityQueue:Evaluate()
 	--    A seal swap is a global: it must fit before the next swing.
 	if hasUnsealedWrath and secondaryName and activeSeal == primaryName and echoes >= primaryStacks and swingOpen and gcdReady then
 		Add(secondaryName, false)
+	end
+
+	-- 1.2. Boss Burst: major offensive cooldowns or ready on-use trinkets on worldbosses.
+	if hasTarget and InCombatLockdown() and (db.suggestBurst ~= false) and cls == "worldboss" and activeSeal ~= nil then
+		local burstSpells = {
+			ns.SPELLS.AVENGING_WRATH,
+			ns.SPELLS.BLOOD_FURY,
+			ns.SPELLS.BERSERKING,
+		}
+		local addedBurst = false
+		for _, burstName in ipairs(burstSpells) do
+			if IsKnown(burstName) and IsUsable(burstName) and self:IsReady(burstName) then
+				Add(burstName, false, { isBurst = true })
+				addedBurst = true
+				break
+			end
+		end
+		if not addedBurst then
+			local trinketSpell = FindReadyTrinketSpell()
+			if trinketSpell then
+				Add(trinketSpell, false, { isBurst = true })
+			end
+		end
 	end
 
 	-- 1.5. Glowing procs (Blizzard SpellActivationOverlay): react immediately to
@@ -539,6 +592,7 @@ function PriorityQueue:Evaluate()
 	self.currentInRange = current and current.inRange or nil
 	self.currentIsProc = current and current.isProc == true or false
 	self.currentIsInterrupt = current and current.isInterrupt == true or false
+	self.currentIsBurst = current and current.isBurst == true or false
 	self.hasTarget = hasTarget and true or false
 
 	return self.current, self.next

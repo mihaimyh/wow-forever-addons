@@ -333,9 +333,11 @@ function CombatTracker:RefreshSeal()
 	local foundSeal = false
 	local scanComplete = false
 	local foundOwnAura = false
+	local foundRighteousFury = false
 	local foundAuras = {}
 	local foundBlessings = {}
 	local foundOwnBlessings = {}
+	local foundOwnBlessingExpiry = {}
 	for i = 1, 40 do
 		local ok, aura = pcall(C_UnitAuras.GetAuraDataByIndex, "player", i, "HELPFUL")
 		if not ok then break end
@@ -351,9 +353,17 @@ function CombatTracker:RefreshSeal()
 			sawReadable = true
 			local src = aura.sourceUnit
 			local fromPlayer = (src ~= nil and not ns.IsSecret(src) and src == "player")
-			if self:IsBlessingName(name) then
+			if name == ns.SPELLS.RIGHTEOUS_FURY then
+				foundRighteousFury = true
+			elseif self:IsBlessingName(name) then
 				foundBlessings[name] = true
-				if fromPlayer then foundOwnBlessings[name] = true end
+				if fromPlayer then
+					foundOwnBlessings[name] = true
+					local expiry = aura.expirationTime
+					if ns.IsReadable(expiry) and type(expiry) == "number" and expiry > 0 then
+						foundOwnBlessingExpiry[name] = expiry
+					end
+				end
 			elseif self:IsAuraName(name) then
 				foundAuras[name] = true
 				if fromPlayer then foundOwnAura = true end
@@ -377,8 +387,10 @@ function CombatTracker:RefreshSeal()
 	if not InCombatLockdown() then
 		self.activeBlessings = foundBlessings
 		self.ownBlessings = foundOwnBlessings
+		self.ownBlessingExpiry = foundOwnBlessingExpiry
 		self.activeAuras = foundAuras
 		self.hasOwnAura = foundOwnAura
+		self.hasRighteousFury = foundRighteousFury
 		if not foundSeal and (sawReadable or scanComplete) then
 			self.activeSeal = nil
 			self.activeSealID = nil
@@ -433,6 +445,27 @@ function CombatTracker:IsAuraName(name)
 end
 
 local IsSpellKnownByName = ns.IsSpellKnownByName
+local EARLY_REFRESH_SECONDS = 60
+
+local function IsBuffExpiringSoon(expiry)
+	if ns.db and ns.db.buffRefreshEarly == false then return false end
+	if not ns.IsReadable(expiry) or type(expiry) ~= "number" or expiry <= 0 then return false end
+	return (expiry - GetTime()) <= EARLY_REFRESH_SECONDS
+end
+
+function CombatTracker:ResolveBlessingSpell(baseSpell)
+	if not baseSpell then return nil end
+	if (not ns.db or ns.db.preferGreaterBlessings ~= false) and IsInRaid and IsInRaid() then
+		local greater = "Greater " .. baseSpell
+		if IsSpellKnownByName(greater) and C_Spell and C_Spell.IsSpellUsable then
+			local okU, usable = pcall(C_Spell.IsSpellUsable, greater)
+			if okU and not ns.IsSecret(usable) and usable == true then
+				return greater
+			end
+		end
+	end
+	return baseSpell
+end
 
 function CombatTracker:GetMissingBlessing()
 	if InCombatLockdown() then return nil end
@@ -443,20 +476,30 @@ function CombatTracker:GetMissingBlessing()
 
 	local active = self.activeBlessings or {}
 	local own = self.ownBlessings or {}
+	local ownExpiry = self.ownBlessingExpiry or {}
 
 	if pref == "auto" then
-		-- Satisfied only once YOU have your own Blessing active on yourself.
-		-- Another Paladin's Blessing (e.g. Wisdom) does not block your own Kings/Might,
-		-- and we skip whichever Blessing another Paladin already gave you.
-		for _ in pairs(own) do return nil end
+		-- Satisfied when YOU have your own Blessing active on yourself and not
+		-- expiring soon (< 60s). Track which own blessing is expiring so we can refresh it.
+		local expiringOwn = {}
+		for bName in pairs(own) do
+			if IsBuffExpiringSoon(ownExpiry[bName]) then
+				expiringOwn[bName] = true
+			else
+				return nil
+			end
+		end
 		local order = {
 			ns.SPELLS.BLESSING_KINGS,
 			ns.SPELLS.BLESSING_MIGHT,
 			ns.SPELLS.BLESSING_WISDOM,
 		}
 		for _, spellName in ipairs(order) do
-			if IsSpellKnownByName(spellName) and not active[spellName] and not active["Greater " .. spellName] then
-				return spellName
+			local greater = "Greater " .. spellName
+			local blockedByOther = (active[spellName] and not expiringOwn[spellName])
+				or (active[greater] and not expiringOwn[greater])
+			if IsSpellKnownByName(spellName) and not blockedByOther then
+				return self:ResolveBlessingSpell(spellName)
 			end
 		end
 		return nil
@@ -469,8 +512,13 @@ function CombatTracker:GetMissingBlessing()
 	}
 	local desired = map[pref]
 	if not desired or not IsSpellKnownByName(desired) then return nil end
-	if active[desired] or active["Greater " .. desired] then return nil end
-	return desired
+	local greater = "Greater " .. desired
+	if active[desired] or active[greater] then
+		local isOwnExpiring = (own[desired] and IsBuffExpiringSoon(ownExpiry[desired]))
+			or (own[greater] and IsBuffExpiringSoon(ownExpiry[greater]))
+		if not isOwnExpiring then return nil end
+	end
+	return self:ResolveBlessingSpell(desired)
 end
 
 local CASTER_CLASSES = { MAGE = true, PRIEST = true, WARLOCK = true }
@@ -525,11 +573,17 @@ function CombatTracker:FindMissingBlessingForUnit(unit)
 		if not ok or not aura then break end
 		local name = aura.name
 		if name ~= nil and not ns.IsSecret(name) and self:IsBlessingName(name) then
-			active[name] = true
 			local src = aura.sourceUnit
-			if src ~= nil and not ns.IsSecret(src) and src == "player" then
-				hasOwn = true
-				break
+			local fromPlayer = (src ~= nil and not ns.IsSecret(src) and src == "player")
+			if fromPlayer then
+				if IsBuffExpiringSoon(aura.expirationTime) then
+					-- Expiring own blessing: allow re-buffing instead of treating as covered.
+				else
+					hasOwn = true
+					break
+				end
+			else
+				active[name] = true
 			end
 		end
 	end
@@ -538,9 +592,10 @@ function CombatTracker:FindMissingBlessingForUnit(unit)
 
 	for _, spellName in ipairs(BlessingOrderForUnit(unit)) do
 		if IsSpellKnownByName(spellName) and not active[spellName] and not active["Greater " .. spellName] then
+			local resolved = self:ResolveBlessingSpell(spellName)
 			local inRange = true
 			if C_Spell and C_Spell.IsSpellInRange then
-				local okR, r = pcall(C_Spell.IsSpellInRange, spellName, unit)
+				local okR, r = pcall(C_Spell.IsSpellInRange, resolved, unit)
 				if okR and ns.IsReadable(r) and r == false then
 					inRange = false
 				end
@@ -550,7 +605,7 @@ function CombatTracker:FindMissingBlessingForUnit(unit)
 				if not okN or not ns.IsReadable(unitName) or unitName == "" then
 					unitName = unit
 				end
-				return spellName, unit, unitName
+				return resolved, unit, unitName
 			end
 			break
 		end
@@ -589,6 +644,95 @@ function CombatTracker:GetMissingGroupBlessing()
 		end
 	end
 	return nil
+end
+
+function CombatTracker:FindDispelForUnit(unit, spellName, canMagic)
+	local exists = (unit == "player") or (UnitExists and UnitExists(unit))
+	local connected = (unit == "player") or (not UnitIsConnected) or UnitIsConnected(unit)
+	local dead = UnitIsDeadOrGhost and UnitIsDeadOrGhost(unit)
+	if not (exists and connected and not dead) then return nil end
+
+	for i = 1, 40 do
+		local ok, aura = pcall(C_UnitAuras.GetAuraDataByIndex, unit, i, "HARMFUL")
+		if not ok or not aura then break end
+		local dispel = aura.dispelName
+		if type(dispel) == "string" and not ns.IsSecret(dispel) then
+			if dispel == "Poison" or dispel == "Disease" or (canMagic and dispel == "Magic") then
+				local inRange = true
+				if unit ~= "player" and C_Spell and C_Spell.IsSpellInRange then
+					local okR, r = pcall(C_Spell.IsSpellInRange, spellName, unit)
+					if okR and ns.IsReadable(r) and r == false then
+						inRange = false
+					end
+				end
+				if inRange then
+					local unitName = "You"
+					if unit ~= "player" then
+						local okN, n = pcall(UnitName, unit)
+						unitName = (okN and ns.IsReadable(n) and n ~= "") and n or unit
+					end
+					return spellName, unit, unitName, dispel
+				end
+			end
+		end
+	end
+	return nil
+end
+
+function CombatTracker:GetMissingDispel()
+	if InCombatLockdown() then return nil end
+	if ns.db and ns.db.remindDispel == false then return nil end
+	if UnitIsDeadOrGhost and UnitIsDeadOrGhost("player") then return nil end
+	if not C_UnitAuras or not C_UnitAuras.GetAuraDataByIndex then return nil end
+
+	local spellName, canMagic
+	if IsSpellKnownByName(ns.SPELLS.CLEANSE) then
+		spellName, canMagic = ns.SPELLS.CLEANSE, true
+	elseif IsSpellKnownByName(ns.SPELLS.PURIFY) then
+		spellName, canMagic = ns.SPELLS.PURIFY, false
+	else
+		return nil
+	end
+
+	local s, u, n = self:FindDispelForUnit("player", spellName, canMagic)
+	if s then return s, u, n end
+
+	if UnitExists and UnitExists("target") and (not UnitIsPlayer or UnitIsPlayer("target"))
+		and (not UnitCanAttack or not UnitCanAttack("player", "target"))
+		and (not UnitIsFriend or UnitIsFriend("player", "target"))
+		and (not UnitIsUnit or not UnitIsUnit("target", "player")) then
+		s, u, n = self:FindDispelForUnit("target", spellName, canMagic)
+		if s then return s, u, n end
+	end
+
+	if IsInGroup and IsInGroup() then
+		local inRaid = IsInRaid and IsInRaid() or false
+		local total = GetNumGroupMembers and GetNumGroupMembers() or 0
+		local prefix = inRaid and "raid" or "party"
+		local maxUnits = inRaid and math.min(total, 40) or math.min(total, 4)
+		for idx = 1, maxUnits do
+			local unit = prefix .. idx
+			if not (UnitIsUnit and UnitIsUnit(unit, "player")) then
+				s, u, n = self:FindDispelForUnit(unit, spellName, canMagic)
+				if s then return s, u, n end
+			end
+		end
+	end
+	return nil
+end
+
+function CombatTracker:GetThreatBuffWarning()
+	if InCombatLockdown() then return nil end
+	if ns.db and ns.db.warnRighteousFury == false then return nil end
+	if not (IsInGroup and IsInGroup()) then return nil end
+	if not self.hasRighteousFury then return nil end
+	if UnitGroupRolesAssigned then
+		local okR, role = pcall(UnitGroupRolesAssigned, "player")
+		if okR and not ns.IsSecret(role) and role == "TANK" then
+			return nil
+		end
+	end
+	return ns.SPELLS.RIGHTEOUS_FURY
 end
 
 function CombatTracker:GetMissingAura()

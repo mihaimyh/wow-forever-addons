@@ -711,6 +711,32 @@ function UI:BuildNameplateWidget(classicFrame)
 	npFaceTag:SetTextColor(1.0, 0.25, 0.20, 1.0)
 	npFaceTag:Hide()
 
+	-- Compact nameplate swing bar (3px below npMain)
+	local npSwingBar = CreateFrame("StatusBar", nil, npMain)
+	npSwingBar:SetPoint("TOPLEFT", npMain, "BOTTOMLEFT", 0, -2)
+	npSwingBar:SetPoint("TOPRIGHT", npMain, "BOTTOMRIGHT", 0, -2)
+	SetPixelHeight(npSwingBar, 3)
+	npSwingBar:SetStatusBarTexture("Interface\\Buttons\\WHITE8X8")
+	npSwingBar:SetStatusBarColor(GOLD[1], GOLD[2], GOLD[3], 0.95)
+	npSwingBar:SetMinMaxValues(0, 1)
+	npSwingBar:SetValue(0)
+	local npSwingTrack = npSwingBar:CreateTexture(nil, "BACKGROUND")
+	npSwingTrack:SetAllPoints()
+	npSwingTrack:SetColorTexture(0.05, 0.05, 0.07, 0.80)
+	npSwingBar:Hide()
+
+	-- Compact nameplate Unsealed Wrath echo pips (3 diamonds above npMain)
+	local npPips = {}
+	for i = 1, 3 do
+		local pip = npMain:CreateTexture(nil, "OVERLAY")
+		SetPixelSize(pip, 5, 5)
+		pip:SetPoint("BOTTOM", npMain, "TOP", (i - 2) * 9, 5)
+		pip:SetRotation(math.rad(45))
+		pip:SetColorTexture(GOLD[1], GOLD[2], GOLD[3], 0.22)
+		pip:Hide()
+		npPips[i] = pip
+	end
+
 	local npRefresh = 0
 	npFrame:SetScript("OnUpdate", function(_, elapsed)
 		npRefresh = npRefresh + (elapsed or 0)
@@ -733,6 +759,8 @@ function UI:BuildNameplateWidget(classicFrame)
 	self.npNextKeyHolder = npNextKeyHolder
 	self.npNextKey = npNextKey
 	self.npFaceTag = npFaceTag
+	self.npSwingBar = npSwingBar
+	self.npPips = npPips
 end
 
 -- Optional Masque support: lets Masque skin the nameplate icons (and HUD icons)
@@ -869,10 +897,15 @@ function UI:RefreshInner()
 		tracker:RefreshSeal()
 	end
 
-	local missingBlessing = (not inCombat) and tracker and tracker.GetMissingBlessing and tracker:GetMissingBlessing() or nil
-	local missingAura = (not inCombat) and tracker and tracker.GetMissingAura and tracker:GetMissingAura() or nil
+	local dispelSpell, dispelUnit, dispelName
+	if not inCombat and tracker and tracker.GetMissingDispel then
+		dispelSpell, dispelUnit, dispelName = tracker:GetMissingDispel()
+	end
+	local threatWarning = (not inCombat and not dispelSpell and tracker and tracker.GetThreatBuffWarning) and tracker:GetThreatBuffWarning() or nil
+	local missingBlessing = (not inCombat and not dispelSpell and not threatWarning) and tracker and tracker.GetMissingBlessing and tracker:GetMissingBlessing() or nil
+	local missingAura = (not inCombat and not dispelSpell and not threatWarning and not missingBlessing) and tracker and tracker.GetMissingAura and tracker:GetMissingAura() or nil
 	local missingGroupSpell, missingGroupUnit, missingGroupName
-	if not inCombat and not missingBlessing and not missingAura and tracker then
+	if not inCombat and not dispelSpell and not threatWarning and not missingBlessing and not missingAura and tracker then
 		if tracker.GetMissingTargetBlessing then
 			missingGroupSpell, missingGroupUnit, missingGroupName = tracker:GetMissingTargetBlessing()
 		end
@@ -882,7 +915,7 @@ function UI:RefreshInner()
 	end
 
 	local placing = (not db.locked) and GetTime() < (self.revealUntil or 0)
-	local hasReminder = (missingBlessing ~= nil) or (missingAura ~= nil) or (missingGroupSpell ~= nil)
+	local hasReminder = (dispelSpell ~= nil) or (threatWarning ~= nil) or (missingBlessing ~= nil) or (missingAura ~= nil) or (missingGroupSpell ~= nil)
 	local targetPlate = (not hasReminder) and self:GetTargetNameplate(db, hasHostile) or nil
 	local useNameplate = (targetPlate ~= nil) and (self.npFrame ~= nil)
 
@@ -930,7 +963,17 @@ function UI:RefreshInner()
 	end
 
 	local current, nextAction = queue:Evaluate()
-	if missingBlessing then
+	if dispelSpell then
+		if current and current ~= dispelSpell then
+			nextAction = current
+		end
+		current = dispelSpell
+	elseif threatWarning then
+		if current and current ~= threatWarning then
+			nextAction = current
+		end
+		current = threatWarning
+	elseif missingBlessing then
 		if missingAura then
 			nextAction = missingAura
 		elseif current and current ~= missingBlessing then
@@ -951,7 +994,13 @@ function UI:RefreshInner()
 
 	local displayName = current
 	if not useNameplate then
-		self:UpdateClickCast(current, missingGroupSpell and missingGroupUnit or nil, missingGroupSpell and missingGroupName or nil)
+		if threatWarning and current == threatWarning then
+			self:UpdateClickCast(nil)
+		elseif dispelSpell and current == dispelSpell then
+			self:UpdateClickCast(dispelSpell, dispelUnit, dispelName)
+		else
+			self:UpdateClickCast(current, missingGroupSpell and missingGroupUnit or nil, missingGroupSpell and missingGroupName or nil)
+		end
 	end
 	if not displayName and not queue.hasTarget then
 		displayName = tracker:GetActiveSeal()
@@ -1017,7 +1066,15 @@ function UI:RefreshInner()
 
 	local passiveStatus = (current == nil and displayName ~= nil)
 
-	if missingBlessing and current == missingBlessing then
+	local notFacing = tracker and tracker.IsNotFacing and tracker:IsNotFacing() or false
+
+	if dispelSpell and current == dispelSpell then
+		statusText = "DISPEL: " .. tostring(dispelName or dispelUnit)
+		statusColor = { 0.35, 0.85, 1.0 }
+	elseif threatWarning and current == threatWarning then
+		statusText = "THREAT BUFF ON!"
+		statusColor = { 1.0, 0.28, 0.22 }
+	elseif missingBlessing and current == missingBlessing then
 		statusText = "BUFF MISSING"
 		statusColor = WARN
 	elseif missingAura and current == missingAura then
@@ -1026,7 +1083,7 @@ function UI:RefreshInner()
 	elseif missingGroupSpell and current == missingGroupSpell then
 		statusText = "BUFF: " .. tostring(missingGroupName or missingGroupUnit)
 		statusColor = WARN
-	elseif tracker and tracker.IsNotFacing and tracker:IsNotFacing() then
+	elseif notFacing then
 		statusText = "FACE TARGET"
 		statusColor = { 1.0, 0.28, 0.22 }
 	elseif queue.currentIsInterrupt then
@@ -1038,6 +1095,9 @@ function UI:RefreshInner()
 	elseif warnSeal then
 		statusText = string.format("SEAL %s", Fmt(sealLeft))
 		statusColor = WARN
+	elseif queue.currentIsBurst then
+		statusText = "BURST!"
+		statusColor = { 1.0, 0.72, 0.20 }
 	elseif queue.currentIsProc then
 		statusText = "PROC!"
 		statusColor = READY
@@ -1140,8 +1200,44 @@ function UI:RefreshInner()
 			self.npMainIcon:SetVertexColor(1, 1, 1, 1)
 		end
 
-		local notFacing = tracker and tracker.IsNotFacing and tracker:IsNotFacing()
+		local showNpBars = db.nameplateBars ~= false
+		local showNpPips = showNpBars and trackerOn
+		if self.npPips then
+			for i = 1, 3 do
+				local pip = self.npPips[i]
+				if pip then
+					if showNpPips then
+						local lit = i <= echoes
+						local col = ready and READY or GOLD
+						pip:SetColorTexture(col[1], col[2], col[3], lit and 0.95 or 0.22)
+						pip:Show()
+					else
+						pip:Hide()
+					end
+				end
+			end
+		end
+
+		if self.npSwingBar then
+			local swingProg = inCombat and tracker and tracker:GetSwingProgress() or nil
+			if showNpBars and inCombat and tracker and tracker.swingKnown and swingProg ~= nil then
+				self.npSwingBar:SetMinMaxValues(0, 1)
+				self.npSwingBar:SetValue(swingProg)
+				if tracker:IsSwingWindowOpen(1.5) then
+					self.npSwingBar:SetStatusBarColor(GOLD[1], GOLD[2], GOLD[3], 0.95)
+				else
+					self.npSwingBar:SetStatusBarColor(WARN[1], WARN[2], WARN[3], 0.85)
+				end
+				self.npSwingBar:Show()
+			else
+				self.npSwingBar:SetValue(0)
+				self.npSwingBar:Hide()
+			end
+		end
+
 		if self.npFaceTag then
+			self.npFaceTag:ClearAllPoints()
+			self.npFaceTag:SetPoint("BOTTOM", self.npMain, "TOP", 0, showNpPips and 13 or 2)
 			self.npFaceTag:SetShown(notFacing and true or false)
 		end
 
@@ -1150,6 +1246,8 @@ function UI:RefreshInner()
 			borderCol = { 1.0, 0.28, 0.22 }
 		elseif queue.currentIsInterrupt or warnSeal then
 			borderCol = WARN
+		elseif queue.currentIsBurst then
+			borderCol = { 1.0, 0.72, 0.20 }
 		elseif ready or queue.currentIsProc then
 			borderCol = READY
 		elseif queue.currentNoMana then
@@ -1190,6 +1288,23 @@ function UI:RefreshInner()
 		if kit then pcall(PlaySound, kit) end
 	end
 	self.wasReady = ready
+
+	if db.alertSounds ~= false and PlaySound and SOUNDKIT then
+		local fallbackKit = SOUNDKIT.IG_MAINMENU_OPTION_CHECKBOX_ON
+		if notFacing and not self.wasNotFacing then
+			local kit = SOUNDKIT.IG_MAINMENU_OPTION_CHECKBOX_OFF or fallbackKit
+			if kit then pcall(PlaySound, kit) end
+		elseif queue.currentIsInterrupt and not self.wasInterrupt then
+			local kit = SOUNDKIT.RAID_WARNING or SOUNDKIT.READY_CHECK or fallbackKit
+			if kit then pcall(PlaySound, kit) end
+		elseif queue.currentIsProc and not self.wasProc then
+			local kit = SOUNDKIT.READY_CHECK or fallbackKit
+			if kit then pcall(PlaySound, kit) end
+		end
+	end
+	self.wasNotFacing = notFacing
+	self.wasInterrupt = queue.currentIsInterrupt == true
+	self.wasProc = queue.currentIsProc == true
 
 	local fx = ns:GetModule("FX")
 	if fx then
