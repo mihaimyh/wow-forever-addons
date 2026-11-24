@@ -2044,6 +2044,68 @@ Test("47. Optional Masque integration registers Nameplate Icons and HUD Icons gr
 	AssertEq(#added["HUD Icons"], 2, "HUD Icons group must register main and nextFrame")
 end)
 
+Test("48. Friendly non-party target gets optimal missing Blessing (skipping other Paladin buffs) and arms click-to-cast on target", function()
+	local targetAuras = {
+		{ name = "Blessing of Kings", spellId = 20217, sourceUnit = "other", expirationTime = 4000 },
+	}
+	local c = CreateEnv({
+		inCombat = false,
+		targetExists = true,
+		targetHostile = false,
+		knownSpells = {
+			["Blessing of Kings"] = 20217,
+			["Blessing of Might"] = 19740,
+			["Blessing of Wisdom"] = 19742,
+			["Retribution Aura"] = 7294,
+			["Seal of Righteousness"] = 20288,
+		},
+		playerAuras = {
+			{ name = "Blessing of Kings", spellId = 20217, sourceUnit = "player", expirationTime = 4000 },
+			{ name = "Retribution Aura", spellId = 7294, sourceUnit = "player", expirationTime = 0 },
+		},
+	})
+	c.env.IsInGroup = function() return false end
+	c.env.UnitIsPlayer = function(u) return u == "target" end
+	c.env.UnitIsFriend = function(_, u) return u == "target" end
+	c.env.UnitIsConnected = function() return true end
+	c.env.UnitIsDeadOrGhost = function() return false end
+	c.env.UnitIsUnit = function(a, b) return a == b end
+	c.env.UnitClass = function() return "Warrior", "WARRIOR" end
+	c.env.UnitPowerType = function() return 1 end
+	c.env.UnitName = function(u) return u == "target" and "Garrosh" or u end
+	c.env.C_Spell.IsSpellInRange = function(_, u) return u == "target" end
+	c.env.C_UnitAuras.GetAuraDataByIndex = function(u, idx)
+		if u == "player" then
+			return (idx == 1 and { name = "Blessing of Kings", spellId = 20217, sourceUnit = "player", expirationTime = 4000 })
+				or (idx == 2 and { name = "Retribution Aura", spellId = 7294, sourceUnit = "player", expirationTime = 0 })
+				or nil
+		end
+		if u == "target" then return targetAuras[idx] end
+		return nil
+	end
+
+	local tracker = c.ns:GetModule("CombatTracker")
+	tracker:RefreshSeal()
+
+	-- Warrior already has Kings from another Paladin -> must suggest next best (Blessing of Might)
+	local spell, unit, unitName = tracker:GetMissingTargetBlessing()
+	AssertEq(spell, "Blessing of Might", "Friendly warrior with another Paladin's Kings must get Blessing of Might")
+	AssertEq(unit, "target", "Target unit must be 'target'")
+	AssertEq(unitName, "Garrosh", "Target name must be Garrosh")
+
+	local ui = c.ns:GetModule("UI")
+	local attrs = {}
+	ui.clickBtn.SetAttribute = function(_, k, v) attrs[k] = v end
+	ui:Refresh()
+	AssertEq(attrs.spell, "Blessing of Might", "Click-to-cast must arm Blessing of Might")
+	AssertEq(attrs.unit, "target", "Click-to-cast must target 'target'")
+	AssertEq(ui.status:GetText(), "BUFF: Garrosh", "HUD status must show BUFF: Garrosh")
+
+	-- Once player casts their own Blessing on target, no further buff is suggested
+	targetAuras[2] = { name = "Blessing of Might", spellId = 19740, sourceUnit = "player", expirationTime = 4000 }
+	AssertEq(tracker:GetMissingTargetBlessing(), nil, "Target with player's own Blessing must not be prompted again")
+end)
+
 print(string.format("\nResults: %d passed, %d failed", passed, failed))
 if failed > 0 then
 	os.exit(1)

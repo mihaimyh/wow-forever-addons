@@ -232,7 +232,7 @@ function Config:OnInitialize()
 			end)
 
 		self:AddCheckbox(buffCat, "RetPulse_RemindGroupBlessings", "remindGroupBlessings",
-			"Buff missing party/raid", "Remind out of combat to cast the best missing Blessing on party or raid members (click icon to cast directly on them).", function()
+			"Buff party/raid & friendly target", "Remind out of combat to cast the best missing Blessing on party/raid members or your friendly player target (click icon to cast).", function()
 				local ui = ns:GetModule("UI")
 				if ui then ui:Refresh() end
 			end)

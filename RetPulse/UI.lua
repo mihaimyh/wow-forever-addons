@@ -846,8 +846,13 @@ function UI:RefreshInner()
 	local missingBlessing = (not inCombat) and tracker and tracker.GetMissingBlessing and tracker:GetMissingBlessing() or nil
 	local missingAura = (not inCombat) and tracker and tracker.GetMissingAura and tracker:GetMissingAura() or nil
 	local missingGroupSpell, missingGroupUnit, missingGroupName
-	if not inCombat and not missingBlessing and not missingAura and tracker and tracker.GetMissingGroupBlessing then
-		missingGroupSpell, missingGroupUnit, missingGroupName = tracker:GetMissingGroupBlessing()
+	if not inCombat and not missingBlessing and not missingAura and tracker then
+		if tracker.GetMissingTargetBlessing then
+			missingGroupSpell, missingGroupUnit, missingGroupName = tracker:GetMissingTargetBlessing()
+		end
+		if not missingGroupSpell and tracker.GetMissingGroupBlessing then
+			missingGroupSpell, missingGroupUnit, missingGroupName = tracker:GetMissingGroupBlessing()
+		end
 	end
 
 	local placing = (not db.locked) and GetTime() < (self.revealUntil or 0)

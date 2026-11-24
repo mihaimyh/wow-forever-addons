@@ -490,6 +490,67 @@ local function BlessingOrderForUnit(unit)
 	return { ns.SPELLS.BLESSING_KINGS, ns.SPELLS.BLESSING_MIGHT, ns.SPELLS.BLESSING_WISDOM }
 end
 
+function CombatTracker:FindMissingBlessingForUnit(unit)
+	local exists = UnitExists and UnitExists(unit)
+	local connected = (not UnitIsConnected) or UnitIsConnected(unit)
+	local dead = UnitIsDeadOrGhost and UnitIsDeadOrGhost(unit)
+	local isSelf = UnitIsUnit and UnitIsUnit(unit, "player")
+	if not (exists and connected and not dead and not isSelf) then
+		return nil
+	end
+
+	local hasOwn = false
+	local active = {}
+	for i = 1, 40 do
+		local ok, aura = pcall(C_UnitAuras.GetAuraDataByIndex, unit, i, "HELPFUL")
+		if not ok or not aura then break end
+		local name = aura.name
+		if name ~= nil and not ns.IsSecret(name) and self:IsBlessingName(name) then
+			active[name] = true
+			local src = aura.sourceUnit
+			if src ~= nil and not ns.IsSecret(src) and src == "player" then
+				hasOwn = true
+				break
+			end
+		end
+	end
+
+	if hasOwn then return nil end
+
+	for _, spellName in ipairs(BlessingOrderForUnit(unit)) do
+		if IsSpellKnownByName(spellName) and not active[spellName] and not active["Greater " .. spellName] then
+			local inRange = true
+			if C_Spell and C_Spell.IsSpellInRange then
+				local okR, r = pcall(C_Spell.IsSpellInRange, spellName, unit)
+				if okR and ns.IsReadable(r) and r == false then
+					inRange = false
+				end
+			end
+			if inRange then
+				local okN, unitName = pcall(UnitName, unit)
+				if not okN or not ns.IsReadable(unitName) or unitName == "" then
+					unitName = unit
+				end
+				return spellName, unit, unitName
+			end
+			break
+		end
+	end
+	return nil
+end
+
+function CombatTracker:GetMissingTargetBlessing()
+	if InCombatLockdown() then return nil end
+	if ns.db and ns.db.remindGroupBlessings == false then return nil end
+	if UnitIsDeadOrGhost and UnitIsDeadOrGhost("player") then return nil end
+	if not C_UnitAuras or not C_UnitAuras.GetAuraDataByIndex then return nil end
+	if not UnitExists or not UnitExists("target") then return nil end
+	if UnitIsPlayer and not UnitIsPlayer("target") then return nil end
+	if UnitCanAttack and UnitCanAttack("player", "target") then return nil end
+	if UnitIsFriend and not UnitIsFriend("player", "target") then return nil end
+	return self:FindMissingBlessingForUnit("target")
+end
+
 function CombatTracker:GetMissingGroupBlessing()
 	if InCombatLockdown() then return nil end
 	if ns.db and ns.db.remindGroupBlessings == false then return nil end
@@ -503,49 +564,9 @@ function CombatTracker:GetMissingGroupBlessing()
 	local maxUnits = inRaid and math.min(total, 40) or math.min(total, 4)
 
 	for idx = 1, maxUnits do
-		local unit = prefix .. idx
-		local exists = UnitExists and UnitExists(unit)
-		local connected = (not UnitIsConnected) or UnitIsConnected(unit)
-		local dead = UnitIsDeadOrGhost and UnitIsDeadOrGhost(unit)
-		local isSelf = UnitIsUnit and UnitIsUnit(unit, "player")
-		if exists and connected and not dead and not isSelf then
-			local hasOwn = false
-			local active = {}
-			for i = 1, 40 do
-				local ok, aura = pcall(C_UnitAuras.GetAuraDataByIndex, unit, i, "HELPFUL")
-				if not ok or not aura then break end
-				local name = aura.name
-				if name ~= nil and not ns.IsSecret(name) and self:IsBlessingName(name) then
-					active[name] = true
-					local src = aura.sourceUnit
-					if src ~= nil and not ns.IsSecret(src) and src == "player" then
-						hasOwn = true
-						break
-					end
-				end
-			end
-
-			if not hasOwn then
-				for _, spellName in ipairs(BlessingOrderForUnit(unit)) do
-					if IsSpellKnownByName(spellName) and not active[spellName] and not active["Greater " .. spellName] then
-						local inRange = true
-						if C_Spell and C_Spell.IsSpellInRange then
-							local okR, r = pcall(C_Spell.IsSpellInRange, spellName, unit)
-							if okR and ns.IsReadable(r) and r == false then
-								inRange = false
-							end
-						end
-						if inRange then
-							local okN, unitName = pcall(UnitName, unit)
-							if not okN or not ns.IsReadable(unitName) or unitName == "" then
-								unitName = unit
-							end
-							return spellName, unit, unitName
-						end
-						break
-					end
-				end
-			end
+		local spellName, unit, unitName = self:FindMissingBlessingForUnit(prefix .. idx)
+		if spellName then
+			return spellName, unit, unitName
 		end
 	end
 	return nil
