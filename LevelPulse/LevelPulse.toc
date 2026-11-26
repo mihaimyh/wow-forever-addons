@@ -1,0 +1,20 @@
+## Interface: 16001
+## Title: LevelPulse
+## Notes: Smart 1-click XP buff, Campfire, Well Fed & Cozy Sleeping Bag advisor with XP/hr telemetry for WoW: Forever.
+## Author: mdumi
+## Version: 1.4.1
+## SavedVariables: LevelPulseDB
+## SavedVariablesPerCharacter: LevelPulseCharDB
+## IconTexture: Interface\Icons\INV_Misc_Food_15
+## AddonCompartmentFunc: LevelPulse_OnCompartmentClick
+## AddonCompartmentFuncOnEnter: LevelPulse_OnCompartmentEnter
+## AddonCompartmentFuncOnLeave: LevelPulse_OnCompartmentLeave
+
+Core.lua
+UITheme.lua
+Telemetry.lua
+FoodGuide.lua
+Scanner.lua
+Advisor.lua
+UI.lua
+Config.lua
