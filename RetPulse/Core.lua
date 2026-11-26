@@ -73,7 +73,7 @@ local DEFAULTS = {
 	pvpPeel = true,          -- suggest HoJ or Blessing of Protection when attacker hits friendly healer/caster
 	pvpAntiStealth = true,   -- suggest Consecration immediately if a melee Rogue/Druid vanishes
 	crusaderOnBoss = true,   -- recommend Seal of the Crusader opener on Elites/Bosses
-	crusaderBossOnly = false, -- limit Crusader opener to worldbosses (skip dungeon trash elites)
+	crusaderBossOnly = true,  -- limit Crusader opener to worldbosses by default (saves mana on dungeon trash)
 	talentAdvisor = true,    -- highlight RetPulse talents on PlayerSpellsFrame.TalentsFrame
 	talentBuild = "dps",     -- "dps" (Benediction) or "leveling" (Deflection)
 	preferredBlessing = "auto", -- "auto" (Kings->Might->Wisdom) | "kings" | "might" | "wisdom" | "off"
@@ -95,7 +95,7 @@ local DEFAULTS = {
 	nameplateOffsetX = -4,       -- horizontal offset (px) from left edge of target nameplate
 	nameplateOffsetY = 0,        -- vertical offset (px) from target nameplate
 	clickToCast = true,          -- click the HUD icon to cast the recommendation (out of combat only)
-	schema = 5,
+	schema = 6,
 	twistWithoutTalent = false, -- twist below 40, as the sim video advises
 	bracketMode = "video",       -- "video" (3 brackets, per the deep dive) or "icy" (2)
 	bracketsIcy = false,         -- legacy mirror of bracketMode
@@ -363,6 +363,12 @@ ns:On("ADDON_LOADED", function(_, loadedName)
 			RetPulseDB.traceEnabled = false
 			RetPulseDB.logEnabled = false
 			schema = 5
+		end
+		if schema < 6 then
+			-- Clear pre-fix weaponSpeedCache entries that could have been distorted by
+			-- Seal of the Crusader (+40% attack speed) on login/reload before RefreshSeal.
+			RetPulseDB.weaponSpeedCache = {}
+			schema = 6
 		end
 		RetPulseDB.schema = schema
 	end

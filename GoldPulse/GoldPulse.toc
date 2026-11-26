@@ -1,0 +1,22 @@
+## Interface: 16001
+## Title: GoldPulse
+## Notes: TSM-backed gold advisor for WoW: Forever — bag sell/hold/vendor tips and AH flip suggestions.
+## Author: mdumi
+## Version: 1.0.6
+## OptionalDeps: TradeSkillMaster, Auctionator
+## SavedVariables: GoldPulseDB
+## IconTexture: Interface\Icons\INV_Misc_Coin_02
+## AddonCompartmentFunc: GoldPulse_OnCompartmentClick
+## AddonCompartmentFuncOnEnter: GoldPulse_OnCompartmentEnter
+## AddonCompartmentFuncOnLeave: GoldPulse_OnCompartmentLeave
+
+Core.lua
+Prices.lua
+Watchlist.lua
+Bags.lua
+Flips.lua
+Posting.lua
+Tooltip.lua
+UI.lua
+AHTab.lua
+Config.lua

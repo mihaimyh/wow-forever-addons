@@ -32,17 +32,22 @@ constraints discovered by probing the game.
    Manager → player aura → internal swing model. Swings that end in
    MISS/DODGE/PARRY/IMMUNE/DEFLECT/EVADE (from `UNIT_COMBAT`) must not add a
    stack. A main-hand weapon swap clears all stacks.
-4. **Seal pairs by weapon speed** (default `video` mode): fast ≤2.5 →
-   3× Righteousness then 1× Fury; medium 2.6–3.2 → 2× Righteousness then
-   1× Command; slow ≥3.3 → 3× Command then 1× Righteousness. `icy` mode
-   (2 thresholds at 3.0) remains selectable. Without the Seal of Command
-   talent, the fast pairing always applies.
-5. **Twist gating**: recommend the secondary seal only when a global (1.5 s)
-   still finishes before the next white swing.
-6. **Priority queue**: missing seal → twist at target stacks → Judgement →
-   Holy Strike → Exorcism (Undead/Demon only) → Hammer of Wrath (open swing
-   window only) → Consecration (AoE toggle) → back to the primary seal after
-   the detonating swing.
+4. **Seal pairs by weapon speed** (default `video` mode with Unsealed Wrath):
+   fast ≤2.55 → 3× Righteousness then 1× Fury; medium 2.6–3.25 → 2× Righteousness
+   then 1× Command; slow ≥3.3 → 3× Command then 1× Righteousness. `icy` mode
+   (2 thresholds at 3.0) remains selectable. Without `Seal of Command`,
+   Righteousness is used (`3+1 Fury` if twisting). With `Seal of Command` but
+   without `Unsealed Wrath` (levels 20–39 leveling or non-UW builds), single-seal
+   selection uses Righteousness for fast (`≤2.55`) and Command for `≥2.6`.
+5. **Twist priority & gating**: Judgement (off-GCD, never on Fury) always outranks
+   seal swaps. Both primary→secondary twists and secondary→primary returns sit
+   after rotational damage spells normally, jumping ahead of on-GCD damage spells
+   only when the next white swing is imminent (`≤1.75 s` remaining).
+6. **Priority queue (PvE)**: missing seal → Boss Crusader opener → Judgement →
+   imminent seal swap → Hammer of Wrath (instant with 5/5 Champion of the Light,
+   swing-window gated when `castTime > 0`) → Consecration / Holy Wrath (AoE) →
+   Holy Strike → Exorcism (Undead/Demon, with secret-safe pre-combat/cast
+   fallback) → Holy Shock → normal seal swap / return to primary.
 7. **Safety**: Judgement must never be recommended while Seal of Fury is up
    (its Judgement is a taunt).
 8. **GCD**: every non-Judgement cast spends a 1.5 s global; Judgement is

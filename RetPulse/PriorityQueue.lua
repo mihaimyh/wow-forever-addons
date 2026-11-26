@@ -46,6 +46,16 @@ local function InRange(name)
 	return inRange and true or false
 end
 
+local function GetCastTimeSeconds(name)
+	if not name or not C_Spell or not C_Spell.GetSpellInfo then return nil end
+	local ok, info = pcall(C_Spell.GetSpellInfo, name)
+	if not ok or type(info) ~= "table" or ns.IsSecret(info) then return nil end
+	local okCt, ct = pcall(function() return info.castTime end)
+	if not okCt or not ns.IsReadable(ct) or type(ct) ~= "number" then return nil end
+	if ct <= 0 then return 0 end
+	return (ct > 20) and (ct / 1000) or ct
+end
+
 -- In combat the client reports cooldowns as secret values, so the queue keeps
 -- its own clock from the cast events it can read.
 local BASE_COOLDOWN = {
@@ -297,9 +307,15 @@ function PriorityQueue:GetSealPair()
 	end
 
 	-- Never ask for a seal the player does not have.
-	if not tracker:IsSealAvailable(primaryName) then
-		if tracker:IsSealAvailable(ns.SPELLS.SEAL_RIGHT) or not tracker:IsSealAvailable(ns.SPELLS.SEAL_COMMAND) then
+	if primaryName and not tracker:IsSealAvailable(primaryName) then
+		if tracker:IsSealAvailable(ns.SPELLS.SEAL_RIGHT) then
 			primaryName = ns.SPELLS.SEAL_RIGHT
+		elseif tracker:IsSealAvailable(ns.SPELLS.SEAL_COMMAND) then
+			primaryName = ns.SPELLS.SEAL_COMMAND
+		elseif tracker:IsSealAvailable(ns.SPELLS.SEAL_CRUSADER) then
+			primaryName = ns.SPELLS.SEAL_CRUSADER
+		else
+			primaryName = nil
 		end
 	end
 	if not tracker:IsSealAvailable(secondaryName) then
@@ -312,16 +328,23 @@ function PriorityQueue:GetSealPair()
 	return primaryName, primaryStacks, secondaryName, secondaryStacks
 end
 
--- True when the echoes are at the cap of the active primary seal and a
--- secondary seal exists to detonate them (timing windows are checked by the
--- caller). Shared by the queue and the HUD so the rule lives in one place.
+function PriorityQueue:GetEchoTarget()
+	local _, primaryStacks = self:GetSealPair()
+	return primaryStacks or 3
+end
+
+-- True when Unsealed Wrath twisting is active and the currently recommended
+-- action is the seal swap itself (never over Judgement or Holy Strike).
 function PriorityQueue:IsTwistReady(hasUnsealedWrath)
 	if not hasUnsealedWrath then return false end
+	if self.currentIsTwist ~= nil then
+		return self.currentIsTwist == true
+	end
 	local tracker = ns:GetModule("CombatTracker")
 	local primaryName, primaryStacks, secondaryName = self:GetSealPair()
 	return secondaryName ~= nil
 		and tracker:GetActiveSeal() == primaryName
-		and tracker:GetEchoes() >= primaryStacks
+		and tracker:GetEchoes() >= (primaryStacks or 3)
 end
 
 function PriorityQueue:Evaluate()
@@ -331,7 +354,7 @@ function PriorityQueue:Evaluate()
 	local db = ns.db or {}
 	local hasUnsealedWrath = (engine and engine.hasUnsealedWrath == true) or (db.twistWithoutTalent == true)
 
-	local primaryName, primaryStacks, secondaryName = self:GetSealPair()
+	local primaryName, primaryStacks, secondaryName, secondaryStacks = self:GetSealPair()
 	local activeSeal = tracker:GetActiveSeal()
 	local echoes = tracker:GetEchoes()
 	local swingsWithSeal = tracker:GetSwingsWithSeal()
@@ -346,18 +369,45 @@ function PriorityQueue:Evaluate()
 		pvp:NoteTargetObservation(tracker)
 	end
 
-	if pvpActive and IsKnown(ns.SPELLS.SEAL_COMMAND) then
-		primaryName = ns.SPELLS.SEAL_COMMAND
+	-- Strict PvP seal firewall: force Seal of Command against enemy players and
+	-- prevent PvE Unsealed Wrath twists (like Seal of Fury) from leaking into PvP.
+	if pvpActive then
+		if IsKnown(ns.SPELLS.SEAL_COMMAND) then
+			primaryName = ns.SPELLS.SEAL_COMMAND
+		end
+		secondaryName = nil
 	end
 
 	local hasTarget = UnitExists("target") and UnitCanAttack("player", "target")
-	local creatureType = hasTarget and UnitCreatureType("target") or nil
-	if creatureType ~= nil and ns.IsSecret(creatureType) then creatureType = nil end
-	local exorcismTarget = creatureType == "Undead" or creatureType == "Demon"
+	local exorcismTarget = false
+	if hasTarget then
+		if tracker and tracker.IsTargetUndeadOrDemon then
+			exorcismTarget = tracker:IsTargetUndeadOrDemon()
+		else
+			local creatureType = UnitCreatureType and UnitCreatureType("target") or nil
+			if creatureType ~= nil and ns.IsSecret(creatureType) then creatureType = nil end
+			exorcismTarget = creatureType == "Undead" or creatureType == "Demon"
+		end
+	end
 	local swingOpen = tracker:IsSwingWindowOpen(GCD)
 	local gcdReady = self:GetGcdRemaining() <= 0.15
 	local inMelee = hasTarget and tracker and tracker.IsInSwingRange and tracker:IsInSwingRange() or false
 	local targetImmune = pvpActive and pvp and pvp.IsTargetImmune and pvp:IsTargetImmune() or false
+
+	-- PvE Unsealed Wrath seal-swap state (per Ebon Hold / Icy Veins / Maxroll):
+	-- Rotational damage spells fire before seal swaps, EXCEPT when the next white
+	-- swing is imminent (spending another 1.5s GCD would miss the swing and waste
+	-- echo storage/detonation). Also returns cleanly from secondary -> primary
+	-- regardless of extra echoes gained via Windfury.
+	local targetPrimaryStacks = primaryStacks or 3
+	local targetSecondarySwings = secondaryStacks or 1
+	local wantTwistToSecondary = (not pvpActive) and hasUnsealedWrath and (secondaryName ~= nil)
+		and (activeSeal == primaryName) and (echoes >= targetPrimaryStacks)
+	local wantReturnToPrimary = (not pvpActive) and hasUnsealedWrath and (primaryName ~= nil) and (secondaryName ~= nil)
+		and (activeSeal == secondaryName) and (swingsWithSeal >= targetSecondarySwings)
+	local pendingTwistSeal = (wantTwistToSecondary and secondaryName) or (wantReturnToPrimary and primaryName) or nil
+	local swingRem = tracker and tracker.GetSwingRemaining and tracker:GetSwingRemaining() or nil
+	local twistImminent = (pendingTwistSeal ~= nil) and (swingRem == nil or swingRem <= (GCD + 0.25))
 
 	self.currentTargetImmune = targetImmune
 	if pvpContext and pvp and pvp.FindOffTargetCast then
@@ -378,6 +428,7 @@ function PriorityQueue:Evaluate()
 			isProc = meta and meta.isProc or false,
 			isInterrupt = meta and meta.isInterrupt or false,
 			isBurst = meta and meta.isBurst or false,
+			isTwist = meta and meta.isTwist or false,
 			isPvp = meta and meta.isPvp or false,
 			pvpLabel = meta and meta.pvpLabel or nil,
 		}
@@ -511,12 +562,6 @@ function PriorityQueue:Evaluate()
 		Add(primaryName, false)
 	end
 
-	-- 1. Twist: echoes are at the cap for the active seal, so change seals.
-	--    A seal swap is a global: it must fit before the next swing.
-	if hasUnsealedWrath and secondaryName and activeSeal == primaryName and echoes >= primaryStacks and swingOpen and gcdReady then
-		Add(secondaryName, false)
-	end
-
 	-- 1.1. PvP 30yd Execute Snipe & Post-HoJ Double-Damage Judgement.
 	local furyUp = activeSeal == ns.SPELLS.SEAL_FURY
 	if pvpActive and hasTarget and not targetImmune then
@@ -632,15 +677,32 @@ function PriorityQueue:Evaluate()
 		Add(ns.SPELLS.HAMMER_OF_JUSTICE, true, { isPvp = true, pvpLabel = "STUN COMBO!" })
 	end
 
-	-- 2. Judgement. Never while Seal of Fury is up: its Judgement is a taunt.
+	-- 2. Judgement (off-GCD). Always above PvE seal swaps so Judgement is never
+	--    locked out by swapping into Seal of Fury first. Never while Fury is up.
 	local holdJudgement = pvpActive and pvp and pvp.ShouldHoldJudgementForStunCombo and pvp:ShouldHoldJudgementForStunCombo(pvpCtx) or false
 	if hasTarget and (not targetImmune) and not furyUp and not holdJudgement and IsUsable(ns.SPELLS.JUDGEMENT) and self:IsReady(ns.SPELLS.JUDGEMENT) then
 		Add(ns.SPELLS.JUDGEMENT, true)
 	end
 
-	-- 3. Hammer of Wrath (execute <= 20%, only in an open swing window so it
-	--    does not clip a white hit). Higher priority than Holy Strike / Exorcism.
-	if hasTarget and (not targetImmune) and swingOpen and gcdReady and IsUsable(ns.SPELLS.HAMMER_OF_WRATH) and self:IsReady(ns.SPELLS.HAMMER_OF_WRATH) then
+	-- 2.5. Imminent PvE Seal Twist: jump ahead of on-GCD rotational spells only
+	--      when the next white swing is too close to fit another 1.5s GCD first.
+	if twistImminent and gcdReady then
+		Add(pendingTwistSeal, false, { isTwist = true })
+	end
+
+	-- 3. Hammer of Wrath (execute <= 20%). Baseline 1.0s cast requires an open
+	--    swing window at lvl 44-48; 5/5 Champion of the Light reduces castTime
+	--    to 0 (instant cast) so it can fire freely at lvl 50-60.
+	local howCastSec = GetCastTimeSeconds(ns.SPELLS.HAMMER_OF_WRATH)
+	local howWindowOpen
+	if howCastSec == nil then
+		howWindowOpen = swingOpen
+	elseif howCastSec <= 0 then
+		howWindowOpen = true
+	else
+		howWindowOpen = tracker:IsSwingWindowOpen(howCastSec + 0.15)
+	end
+	if hasTarget and (not targetImmune) and howWindowOpen and gcdReady and IsUsable(ns.SPELLS.HAMMER_OF_WRATH) and self:IsReady(ns.SPELLS.HAMMER_OF_WRATH) then
 		Add(ns.SPELLS.HAMMER_OF_WRATH, true)
 	end
 
@@ -663,7 +725,7 @@ function PriorityQueue:Evaluate()
 		Add(ns.SPELLS.HOLY_STRIKE, true)
 	end
 
-	-- 6. Exorcism, only against Undead and Demons: UnitCreatureType is readable.
+	-- 6. Exorcism, only against Undead and Demons.
 	if hasTarget and (not targetImmune) and exorcismTarget and gcdReady and IsUsable(ns.SPELLS.EXORCISM) and self:IsReady(ns.SPELLS.EXORCISM) then
 		Add(ns.SPELLS.EXORCISM, true)
 	end
@@ -673,11 +735,11 @@ function PriorityQueue:Evaluate()
 		Add(ns.SPELLS.HOLY_SHOCK, true)
 	end
 
-	-- 8. Seal upkeep (return to primary after the detonating swing landed).
-	if hasUnsealedWrath and primaryName and secondaryName and activeSeal == secondaryName and gcdReady then
-		if swingsWithSeal >= 1 and echoes < primaryStacks then
-			Add(primaryName, false)
-		end
+	-- 8. Normal PvE Seal Twist / Return: once rotational damage spells are on
+	--    cooldown, perform the due twist (primary -> secondary at target stacks,
+	--    or secondary -> primary after the detonation swing landed).
+	if pendingTwistSeal and (not twistImminent) and gcdReady then
+		Add(pendingTwistSeal, false, { isTwist = true })
 	end
 
 	local current = candidates[1]
@@ -703,6 +765,8 @@ function PriorityQueue:Evaluate()
 
 	if primaryName and activeSeal == nil then
 		ConsiderUpcoming(primaryName, false)
+	elseif pendingTwistSeal then
+		ConsiderUpcoming(pendingTwistSeal, false, self:GetGcdRemaining())
 	end
 
 	if hasTarget then
@@ -717,7 +781,7 @@ function PriorityQueue:Evaluate()
 		if exorcismTarget then
 			ConsiderUpcoming(ns.SPELLS.EXORCISM, true)
 		end
-		if swingOpen and IsUsable(ns.SPELLS.HAMMER_OF_WRATH) then
+		if howWindowOpen and IsUsable(ns.SPELLS.HAMMER_OF_WRATH) then
 			ConsiderUpcoming(ns.SPELLS.HAMMER_OF_WRATH, true)
 		end
 		ConsiderUpcoming(ns.SPELLS.HOLY_SHOCK, true)
@@ -799,6 +863,7 @@ function PriorityQueue:Evaluate()
 	self.currentIsProc = current and current.isProc == true or false
 	self.currentIsInterrupt = current and current.isInterrupt == true or false
 	self.currentIsBurst = current and current.isBurst == true or false
+	self.currentIsTwist = current and current.isTwist == true and (self.countdown == nil or self.countdown <= 0) or false
 	self.currentIsPvp = current and current.isPvp == true or false
 	self.currentPvpLabel = current and current.pvpLabel or nil
 	self.hasTarget = hasTarget and true or false

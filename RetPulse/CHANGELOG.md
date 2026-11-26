@@ -2,6 +2,21 @@
 
 All notable changes to **RetPulse** for **World of Warcraft: Forever (Interface 16001)** are documented in this file.
 
+## [2.2.0] - 2026-11-26
+
+### Added
+- **Imminent-swing PvE Seal Twist scheduling**: aligns Unsealed Wrath twisting with Ebon Hold / Icy Veins / Maxroll priority — `Judgement` (off-GCD) always fires before seal swaps, rotational damage abilities fire first when swing time permits, and seal swaps jump ahead of on-GCD abilities only when the next white swing is imminent (`<= 1.75s`).
+- **Leveling single-seal intelligence (levels 1–59)**: without `Unsealed Wrath`, automatically selects `Seal of Command` on two-handed weapons (`>= 2.6s`) and `Seal of Righteousness` on fast weapons (`<= 2.55s`), switching to the 3-bracket twist table once `Unsealed Wrath` is learned.
+- **Dynamic `Hammer of Wrath` cast-time check**: reads `C_Spell.GetSpellInfo("Hammer of Wrath").castTime` so baseline `1.0s` casts at lvl 44–48 wait for an open swing window while `5/5 Champion of the Light` (`0s` instant cast) fires freely.
+- **Secret-safe `Exorcism` / `Holy Wrath` dungeon tracking**: preserves readable pre-combat `UnitCreatureType` observations and confirms Undead/Demon pulls on manual `Exorcism` casts when `UnitCreatureType` is secret in combat.
+- **Tooltip base weapon speed reader**: extracts printed weapon speed via `C_TooltipInfo.GetInventoryItem` out of combat and migrates `schema = 6` to clear any `Seal of the Crusader` distorted `weaponSpeedCache` entries.
+
+### Fixed
+- **Medium bracket (`2.6–3.2s`) Windfury lock**: removed the `echoes < primaryStacks` check on secondary-to-primary seal return that could strand the rotation in `Seal of Command` after a Windfury proc.
+- **Fast bracket (`<= 2.5s`) Judgement lockout**: prevented twisting into `Seal of Fury` before firing ready off-GCD `Judgement`.
+- **HUD `SWAP NOW` & `X/2` echo pips**: `SWAP NOW` status/sound now triggers only when the recommended icon is the seal swap itself, previews pending twists during GCD, and displays `X/2` target pips in the medium bracket.
+- **Strict PvP seal firewall**: ensured PvE secondary seal twists never leak onto hostile player targets.
+
 ## [2.1.0] - 2026-11-25
 
 ### Added

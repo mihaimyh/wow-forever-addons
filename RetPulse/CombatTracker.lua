@@ -153,6 +153,7 @@ function CombatTracker:OnLogin()
 
 	ns:On("PLAYER_REGEN_DISABLED", function()
 		self.swingsWithSeal = 0
+		self.pullSawUndeadOrDemon = (self.targetExorcismEligible == true)
 	end)
 
 	ns:On("UNIT_COMBAT", function(_, unit, action)
@@ -173,6 +174,8 @@ function CombatTracker:OnLogin()
 		self.targetCasting = false
 		self.notFacingUntil = nil
 		self.hadMeleeWithTarget = false
+		self.pullSawUndeadOrDemon = false
+		self.targetExorcismRejected = false
 		if not InCombatLockdown() then
 			self.judgedCrusader = false
 		end
@@ -203,6 +206,17 @@ function CombatTracker:OnLogin()
 		self.targetCasting = false
 		self.notFacingUntil = nil
 		self.hadMeleeWithTarget = false
+		self.targetExorcismRejected = false
+		self.targetExorcismEligible = nil
+		if UnitExists and UnitCreatureType and SafeBool(UnitExists, "target") == true then
+			local okT, ct = pcall(UnitCreatureType, "target")
+			if okT and ns.IsReadable(ct) and type(ct) == "string" and ct ~= "" then
+				self.targetExorcismEligible = (ct == "Undead" or ct == "Demon")
+				if self.targetExorcismEligible and InCombatLockdown() then
+					self.pullSawUndeadOrDemon = true
+				end
+			end
+		end
 		if not InCombatLockdown() then
 			self.judgedCrusader = false
 		end
@@ -231,13 +245,26 @@ function CombatTracker:OnLogin()
 			end
 		end
 
-		if ns.db and ns.db.facingAlert == false then return end
-		local isFacingErr = (ERR_ATTACK_FACING and message == ERR_ATTACK_FACING)
-			or (SPELL_FAILED_UNIT_NOT_INFRONT and message == SPELL_FAILED_UNIT_NOT_INFRONT)
-			or lower:find("facing", 1, true) ~= nil
-			or lower:find("in front of you", 1, true) ~= nil
-		if isFacingErr then
-			self.notFacingUntil = GetTime() + 2.0
+		if ns.db and ns.db.facingAlert ~= false then
+			local isFacingErr = (ERR_ATTACK_FACING and message == ERR_ATTACK_FACING)
+				or (SPELL_FAILED_UNIT_NOT_INFRONT and message == SPELL_FAILED_UNIT_NOT_INFRONT)
+				or lower:find("facing", 1, true) ~= nil
+				or lower:find("in front of you", 1, true) ~= nil
+			if isFacingErr then
+				self.notFacingUntil = GetTime() + 2.0
+			end
+		end
+
+		if InCombatLockdown() then
+			local isBadExoTarget = lower:find("undead", 1, true) ~= nil
+				or lower:find("demon", 1, true) ~= nil
+				or lower:find("invalid target", 1, true) ~= nil
+				or lower:find("bad target", 1, true) ~= nil
+			if isBadExoTarget then
+				self.targetExorcismRejected = true
+				self.targetExorcismEligible = false
+				self.pullSawUndeadOrDemon = false
+			end
 		end
 	end)
 
@@ -650,6 +677,12 @@ function CombatTracker:OnSpellCast(spellID)
 
 	if name == ns.SPELLS.JUDGEMENT and self:GetActiveSeal() == ns.SPELLS.SEAL_CRUSADER then
 		self.judgedCrusader = true
+	elseif name == ns.SPELLS.EXORCISM or name == ns.SPELLS.HOLY_WRATH then
+		self.targetExorcismEligible = true
+		self.targetExorcismRejected = false
+		if InCombatLockdown() then
+			self.pullSawUndeadOrDemon = true
+		end
 	end
 	if name == ns.SPELLS.BLESSING_FREEDOM or name == ns.SPELLS.BLESSING_PROTECTION then
 		local now = GetTime()
@@ -1747,6 +1780,36 @@ end
 
 function CombatTracker:HasJudgedCrusader()
 	return self.judgedCrusader == true
+end
+
+-- UnitCreatureType("target") is guarded by SecretWhenUnitIdentityRestricted on
+-- Forever 16001 (secret on non-player targets in restricted/dungeon combat).
+-- Read it live when readable, preserve any pre-combat target observation, and
+-- allow manual Exorcism/Holy Wrath casts to confirm an Undead/Demon pull safely.
+function CombatTracker:IsTargetUndeadOrDemon()
+	if not UnitExists or SafeBool(UnitExists, "target") ~= true then return false end
+	if UnitCanAttack and SafeBool(UnitCanAttack, "player", "target") ~= true then return false end
+
+	if UnitCreatureType then
+		local ok, ct = pcall(UnitCreatureType, "target")
+		if ok and ns.IsReadable(ct) and type(ct) == "string" and ct ~= "" then
+			local eligible = (ct == "Undead" or ct == "Demon")
+			self.targetExorcismEligible = eligible
+			if eligible and InCombatLockdown() then
+				self.pullSawUndeadOrDemon = true
+			end
+			return eligible
+		end
+	end
+
+	if self.targetExorcismRejected then return false end
+	if self.targetExorcismEligible ~= nil then
+		return self.targetExorcismEligible == true
+	end
+	if InCombatLockdown() and self.pullSawUndeadOrDemon == true then
+		return true
+	end
+	return false
 end
 
 function CombatTracker:IsNotFacing()

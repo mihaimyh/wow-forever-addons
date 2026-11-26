@@ -743,9 +743,19 @@ Test("8. Unsealed Wrath echoes: miss ignored, weapon swap clears, 3 stacks trigg
 	c.Advance(1.0)
 	AssertEq(tracker:GetEchoes(), 3, "3 echoes")
 
-	-- Remaining swing time is 2.6s (> 1.5s GCD) -> should recommend twist to Seal of Righteousness!
+	-- Remaining swing time is 2.6s (> 1.75s): Judgement (off-GCD) & Holy Strike fire first,
+	-- with the Seal Swap queued right behind them; once they are on CD, secondary seal fires!
+	AssertEq(pq:Evaluate(), "Judgement", "Off-GCD Judgement must fire before Seal Swap")
+	c.Fire("UNIT_SPELLCAST_SUCCEEDED", "player", "j1", 20271)
+	local curBeforeSwap, nxtBeforeSwap = pq:Evaluate()
+	AssertEq(curBeforeSwap, "Holy Strike", "With 2.6s swing window left, Holy Strike fires before non-imminent Seal Swap")
+	AssertEq(nxtBeforeSwap, "Seal of Righteousness", "NEXT slot previews the upcoming Seal Swap right after Holy Strike")
+	c.Fire("UNIT_SPELLCAST_SUCCEEDED", "player", "hs1", 678)
+	-- During the 1.5s GCD after Holy Strike, HUD previews the pending Seal Swap (not 10s HS CD)
+	AssertEq(pq:Evaluate(), "Seal of Righteousness", "During GCD at 3 echoes, upcoming preview shows pending Seal Swap")
+	c.Advance(1.6) -- GCD done, 1.0s left before swing (imminent!) -> SWAP NOW!
 	local cur = pq:Evaluate()
-	AssertEq(cur, "Seal of Righteousness", "At 3 echoes with open swing window, must recommend secondary seal")
+	AssertEq(cur, "Seal of Righteousness", "At 3 echoes when ready, must recommend secondary seal even with <1.5s to swing")
 
 	-- Weapon swap wipes echoes
 	c.SetWeaponItemID(999999)
@@ -1172,6 +1182,7 @@ Test("22. Boss/Elite opener recommends Seal of the Crusader -> Judgement once pe
 		},
 	})
 	c.SetCombat(true)
+	c.ns.db.crusaderBossOnly = false
 	local pq = c.ns:GetModule("PriorityQueue")
 
 	-- On worldboss with no Crusader judged yet: recommend Seal of the Crusader
@@ -1777,6 +1788,7 @@ Test("41. Crusader opener fires once per pull in combat (not on every tab-target
 		},
 	})
 	c.SetCombat(true)
+	c.ns.db.crusaderBossOnly = false
 	local pq = c.ns:GetModule("PriorityQueue")
 
 	c.Fire("UNIT_SPELLCAST_SUCCEEDED", "player", "sc1", 21082)
@@ -1922,6 +1934,7 @@ Test("44. Mana-saving options: Auto-AoE threshold, Boss-only Crusader opener, an
 		},
 	})
 	c.SetCombat(true)
+	c.ns.db.crusaderBossOnly = false
 	local pq = c.ns:GetModule("PriorityQueue")
 
 	-- 1. Boss-only Crusader opener skips dungeon trash elites
@@ -3374,6 +3387,357 @@ Test("74. BG self-buff reminder, self Freedom overwrite, currentInRange=false pr
 		savedDB = savedDB,
 	})
 	AssertEq(c2.ns:GetModule("WeaponEngine").weaponSpeed, 3.5, "BG reload with secret weapon speed must restore from cache")
+end)
+
+Test("75. Fast weapon (<=2.5s) Judgement fires BEFORE Seal of Fury twist, and imminent swing jumps twist ahead of Holy Strike", function()
+	local c = CreateEnv({
+		playerLevel = 60,
+		weaponSpeed = 2.40,
+		knownSpells = {
+			["Unsealed Wrath"] = 1310735,
+			["Seal of Command"] = 20375,
+			["Seal of Righteousness"] = 20288,
+			["Seal of Fury"] = 1311656,
+			["Judgement"] = 20271,
+			["Holy Strike"] = 678,
+		},
+		usableSpells = {
+			["Seal of Command"] = true,
+			["Seal of Righteousness"] = true,
+			["Seal of Fury"] = true,
+			["Judgement"] = true,
+			["Holy Strike"] = true,
+		},
+	})
+	local pq = c.ns:GetModule("PriorityQueue")
+	local ui = c.ns:GetModule("UI")
+	c.SetCombat(true)
+	c.Fire("UNIT_SPELLCAST_SUCCEEDED", "player", "sr", 20288)
+	c.Advance(1.6)
+
+	-- Build 3 Righteousness echoes; leave 0.9s until next swing (imminent!)
+	for _ = 1, 3 do
+		c.Fire("PLAYER_SWING", 2.40, 0)
+		c.Advance(2.40)
+	end
+	AssertEq(c.ns:GetModule("CombatTracker"):GetEchoes(), 3, "3 echoes built on fast weapon")
+	c.Fire("PLAYER_SWING", 2.40, 0)
+	c.Advance(1.5) -- 0.9s remaining on 2.40s swing, echoes = 3, BOTH Judgement and Holy Strike ready!
+
+	-- 1. Off-GCD Judgement MUST come before Seal of Fury (otherwise Fury blocks Judgement!)
+	local cur1 = pq:Evaluate()
+	AssertEq(cur1, "Judgement", "Judgement must ALWAYS fire before twisting into Seal of Fury")
+	ui:Refresh()
+	Assert(ui.status:GetText() ~= "SWAP NOW", "SWAP NOW must NOT show while icon is Judgement")
+
+	-- 2. Cast off-GCD Judgement -> 0.9s left on swing (imminent <= 1.75s), so Seal of Fury jumps AHEAD of Holy Strike!
+	c.Fire("UNIT_SPELLCAST_SUCCEEDED", "player", "j1", 20271)
+	local cur2, nxt2 = pq:Evaluate()
+	AssertEq(cur2, "Seal of Fury", "Imminent swing (0.9s left) must jump Seal of Fury ahead of Holy Strike")
+	AssertEq(nxt2, "Holy Strike", "Holy Strike sits right behind imminent Seal Swap")
+	ui:Refresh()
+	AssertEq(ui.status:GetText(), "SWAP NOW", "SWAP NOW lights up when the recommended icon IS the Seal Swap")
+end)
+
+Test("76. Medium bracket (2.6-3.2s) 2+1 twist survives Windfury double-echo in Command and displays X/2 echo cap", function()
+	local c = CreateEnv({
+		playerLevel = 60,
+		weaponSpeed = 3.00, -- Bladewind (3.00s -> medium: 2x SoR + 1x SoC)
+		knownSpells = {
+			["Unsealed Wrath"] = 1310735,
+			["Seal of Command"] = 20375,
+			["Seal of Righteousness"] = 20288,
+			["Judgement"] = 20271,
+			["Holy Strike"] = 678,
+		},
+		usableSpells = {
+			["Seal of Command"] = true,
+			["Seal of Righteousness"] = true,
+			["Judgement"] = true,
+			["Holy Strike"] = true,
+		},
+	})
+	local tracker = c.ns:GetModule("CombatTracker")
+	local pq = c.ns:GetModule("PriorityQueue")
+	local ui = c.ns:GetModule("UI")
+	c.SetCombat(true)
+
+	c.Fire("UNIT_SPELLCAST_SUCCEEDED", "player", "sr", 20288)
+	c.Advance(1.6)
+	c.Fire("UNIT_SPELLCAST_SUCCEEDED", "player", "j1", 20271)
+	c.Fire("UNIT_SPELLCAST_SUCCEEDED", "player", "hs1", 678)
+	c.Advance(1.6)
+
+	-- 1 swing -> 1/2 echoes
+	c.Fire("PLAYER_SWING", 3.00, 0)
+	c.Advance(1.0)
+	pq:Evaluate()
+	ui:Refresh()
+	Assert(ui.echoText:GetText():find("^1/2") ~= nil, "Medium bracket must display 1/2 echo target, got: " .. tostring(ui.echoText:GetText()))
+	AssertEq(ui.pips[3]:IsShown(), false, "3rd pip stays hidden when target cap is 2")
+
+	-- 2nd swing -> 2/2 echoes -> twist to Seal of Command!
+	c.Advance(2.1)
+	c.Fire("PLAYER_SWING", 3.00, 0)
+	c.Advance(1.0)
+	AssertEq(pq:Evaluate(), "Seal of Command", "At 2/2 echoes in medium bracket, must swap to Seal of Command")
+
+	-- Cast Seal of Command, then simulate detonation swing + Windfury proc (2 swings under SoC -> echoes = 2 == primaryStacks!)
+	c.Fire("UNIT_SPELLCAST_SUCCEEDED", "player", "sc", 20375)
+	c.Advance(1.6)
+	tracker:CountEcho("Seal of Command") -- detonation swing (echoes = 1, swingsWithSeal = 1)
+	tracker:CountEcho("Seal of Command") -- Windfury extra hit (echoes = 2, swingsWithSeal = 2)
+	AssertEq(tracker:GetEchoes(), 2, "Windfury stores a 2nd Command echo")
+
+	pq.cdUntil["Judgement"] = c.env.GetTime() + 5.0
+	pq.cdUntil["Holy Strike"] = c.env.GetTime() + 5.0
+	AssertEq(pq:Evaluate(), "Seal of Righteousness", "Must return to Seal of Righteousness even when echoes == primaryStacks (2)")
+end)
+
+Test("77. Leveling (lvl 20-39 without Unsealed Wrath) uses Seal of Command on 2.6-3.2s 2H weapons and activates 3 brackets at lvl 40+", function()
+	local known = {
+		["Seal of Command"] = 20375,
+		["Seal of Righteousness"] = 20288,
+		["Seal of Fury"] = 1311656,
+		["Judgement"] = 20271,
+		["Holy Strike"] = 678,
+	}
+	-- 1. Level 26 Paladin with Verigan's Fist (3.20s) or Mograine's Might (2.80s), NO Unsealed Wrath
+	local cLvl = CreateEnv({
+		playerLevel = 26,
+		weaponSpeed = 3.20,
+		knownSpells = known,
+		usableSpells = {
+			["Seal of Command"] = true,
+			["Seal of Righteousness"] = true,
+			["Seal of Fury"] = true,
+			["Judgement"] = true,
+			["Holy Strike"] = true,
+		},
+	})
+	local engLvl = cLvl.ns:GetModule("WeaponEngine")
+	local pqLvl = cLvl.ns:GetModule("PriorityQueue")
+	AssertEq(engLvl.hasUnsealedWrath, false, "Level 26 Paladin does not have Unsealed Wrath")
+	AssertEq(engLvl:GetRotation().primary, "Seal of Command", "3.20s 2H while leveling without UW must use Seal of Command")
+	AssertEq(engLvl:GetRotation().secondary, nil, "Without UW, no secondary seal twist")
+	cLvl.SetCombat(true)
+	AssertEq(pqLvl:Evaluate(), "Seal of Command", "Opener seal at lvl 26 with 3.20s 2H must be Seal of Command")
+
+	-- Fast 1H weapon (2.30s) at lvl 26 still uses Seal of Righteousness
+	local cFast = CreateEnv({
+		playerLevel = 26,
+		weaponSpeed = 2.30,
+		knownSpells = known,
+		usableSpells = { ["Seal of Command"] = true, ["Seal of Righteousness"] = true, ["Judgement"] = true, ["Holy Strike"] = true },
+	})
+	AssertEq(cFast.ns:GetModule("WeaponEngine"):GetRotation().primary, "Seal of Righteousness", "Fast 2.30s 1H at lvl 26 uses Seal of Righteousness")
+
+	-- Learn Unsealed Wrath at lvl 40+ with 3.00s weapon -> switches to video medium bracket (2x SoR -> 1x SoC)
+	known["Unsealed Wrath"] = 1310735
+	local c40 = CreateEnv({
+		playerLevel = 42,
+		weaponSpeed = 3.00,
+		knownSpells = known,
+		usableSpells = { ["Seal of Command"] = true, ["Seal of Righteousness"] = true, ["Judgement"] = true, ["Holy Strike"] = true },
+	})
+	local rot40 = c40.ns:GetModule("WeaponEngine"):GetRotation()
+	AssertEq(rot40.primary, "Seal of Righteousness", "With Unsealed Wrath on 3.00s weapon, primary becomes Seal of Righteousness")
+	AssertEq(rot40.primaryStacks, 2, "Medium UW bracket builds 2 stacks")
+	AssertEq(rot40.secondary, "Seal of Command", "Medium UW bracket detonates with 1x Seal of Command")
+end)
+
+Test("78. Dynamic Hammer of Wrath castTime: 1.0s at lvl 44 requires swing window, 0s with 5/5 Champion of the Light fires anytime", function()
+	local howCastMs = 1000
+	local c = CreateEnv({
+		playerLevel = 60,
+		weaponSpeed = 3.50,
+		knownSpells = {
+			["Judgement"] = 20271,
+			["Holy Strike"] = 678,
+			["Hammer of Wrath"] = 24275,
+			["Seal of Command"] = 20375,
+		},
+		usableSpells = {
+			["Judgement"] = true,
+			["Holy Strike"] = true,
+			["Hammer of Wrath"] = true,
+			["Seal of Command"] = true,
+		},
+		inRangeSpells = {
+			["Judgement"] = true,
+			["Holy Strike"] = true,
+			["Hammer of Wrath"] = true,
+		},
+	})
+	local origInfo = c.env.C_Spell.GetSpellInfo
+	c.env.C_Spell.GetSpellInfo = function(idOrName)
+		local info = origInfo(idOrName)
+		if info and info.name == "Hammer of Wrath" then
+			info.castTime = howCastMs
+		end
+		return info
+	end
+
+	local pq = c.ns:GetModule("PriorityQueue")
+	c.SetCombat(true)
+	c.Fire("UNIT_SPELLCAST_SUCCEEDED", "player", "sc", 20375)
+	c.Advance(1.6)
+	c.Fire("UNIT_SPELLCAST_SUCCEEDED", "player", "j1", 20271)
+
+	-- Swing has only 0.6s remaining:
+	c.Fire("PLAYER_SWING", 3.50, 0)
+	c.Advance(2.9)
+
+	-- 1. At lvl 44 (castTime = 1000ms): 0.6s < 1.15s, so HoW waits to avoid clipping white swing -> Holy Strike fires
+	AssertEq(pq:Evaluate(), "Holy Strike", "1.0s castTime Hammer of Wrath must not clip imminent white swing (0.6s left)")
+
+	-- 2. At lvl 60 with 5/5 Champion of the Light (castTime = 0ms instant): fires immediately even with 0.6s left!
+	howCastMs = 0
+	AssertEq(pq:Evaluate(), "Hammer of Wrath", "Instant-cast Hammer of Wrath (castTime=0) must fire freely without swingOpen block")
+end)
+
+Test("79. Seal of the Crusader on login/reload never corrupts weaponSpeedCache (TOC order + Tooltip speed + schema 6 migration)", function()
+	-- 1. Schema 5 -> 6 migration wipes pre-existing corrupted cache ([5322] = 1.64)
+	local preCorruptedDB = {
+		schema = 5,
+		weaponSpeedCache = { [5322] = 1.64 },
+	}
+	-- Simulate login while Seal of the Crusader (+40% speed -> 2.30 / 1.40 = 1.6428) is ALREADY active on player!
+	local c = CreateEnv({
+		inCombat = false,
+		weaponItemID = 5322,
+		weaponSpeed = 2.30 / 1.40,
+		savedDB = preCorruptedDB,
+		playerAuras = {
+			{ name = "Seal of the Crusader", spellId = 20305, sourceUnit = "player", expirationTime = 1020 },
+		},
+	})
+	local engine = c.ns:GetModule("WeaponEngine")
+	AssertEq(c.ns.db.schema, 6, "DB schema must migrate to 6")
+	AssertEq(engine.weaponSpeed, 2.3, "WeaponEngine must detect Seal of the Crusader on login before CombatTracker:OnLogin and restore 2.30s")
+	AssertEq(c.ns.db.weaponSpeedCache[5322], nil, "Crusader-estimated speed must not overwrite clean cache")
+
+	-- 2. Tooltip printed weapon speed overrides any haste/buff distortion and caches exact printed speed
+	c.env.C_TooltipInfo = {
+		GetInventoryItem = function(_, slot)
+			if slot == 16 then
+				return { lines = { { leftText = "Two-Hand", rightText = "Speed 3.50" } } }
+			end
+			return nil
+		end,
+	}
+	c.SetWeaponItemID(19854)
+	c.Fire("PLAYER_EQUIPMENT_CHANGED")
+	AssertEq(engine.weaponSpeed, 3.5, "Tooltip speed reader must extract exact 3.50s base speed despite Crusader aura")
+	AssertEq(c.ns.db.weaponSpeedCache[19854], 3.5, "Tooltip speed must persist cleanly to weaponSpeedCache")
+end)
+
+Test("80. Secret UnitCreatureType in dungeon combat preserves Exorcism via pre-combat observation & manual cast confirmation", function()
+	local secretStr = setmetatable({ __secret = true }, { __tostring = function() error("secret") end })
+	local creatureSecret = false
+	local c = CreateEnv({
+		playerLevel = 30,
+		targetType = "Undead",
+		knownSpells = {
+			["Judgement"] = 20271,
+			["Holy Strike"] = 678,
+			["Exorcism"] = 879,
+			["Seal of Command"] = 20375,
+		},
+		usableSpells = {
+			["Judgement"] = true,
+			["Holy Strike"] = true,
+			["Exorcism"] = true,
+			["Seal of Command"] = true,
+		},
+		inRangeSpells = {
+			["Judgement"] = true,
+			["Holy Strike"] = true,
+			["Exorcism"] = true,
+		},
+	})
+	c.env.UnitCreatureType = function()
+		if creatureSecret then return secretStr end
+		return "Undead"
+	end
+
+	-- 1. Select Undead target out of combat (readable), then enter combat where UnitCreatureType turns secret
+	c.Fire("PLAYER_TARGET_CHANGED")
+	creatureSecret = true
+	c.SetCombat(true)
+	c.Fire("UNIT_SPELLCAST_SUCCEEDED", "player", "sc", 20375)
+	c.Advance(1.6)
+	local pq = c.ns:GetModule("PriorityQueue")
+	pq.cdUntil["Judgement"] = c.env.GetTime() + 6.0
+	pq.cdUntil["Holy Strike"] = c.env.GetTime() + 6.0
+	AssertEq(pq:Evaluate(), "Exorcism", "Pre-combat Undead observation must keep Exorcism working when UnitCreatureType turns secret")
+
+	-- 2. Fresh pull starting with secret target: stays conservative (nil), until player casts Exorcism once -> unlocks pull!
+	c.SetCombat(false)
+	c.Fire("PLAYER_TARGET_CHANGED") -- secret on target select too!
+	c.SetCombat(true)
+	c.Fire("UNIT_SPELLCAST_SUCCEEDED", "player", "sc2", 20375)
+	c.Advance(1.6)
+	pq.cdUntil["Judgement"] = c.env.GetTime() + 6.0
+	pq.cdUntil["Holy Strike"] = c.env.GetTime() + 6.0
+	Assert(pq:Evaluate() ~= "Exorcism", "Unknown secret target must not guess Exorcism blindly")
+
+	-- Player manually casts Exorcism on an Undead mob in the pull -> next tab-target in same pull allows Exorcism!
+	c.Fire("UNIT_SPELLCAST_SUCCEEDED", "player", "exo1", 879)
+	c.Advance(15.5)
+	c.Fire("PLAYER_TARGET_CHANGED")
+	pq.cdUntil["Judgement"] = c.env.GetTime() + 6.0
+	pq.cdUntil["Holy Strike"] = c.env.GetTime() + 6.0
+	AssertEq(pq:Evaluate(), "Exorcism", "Confirmed Undead pull must keep Exorcism active across tab-targets in same pull")
+
+	-- Invalid target error immediately suppresses Exorcism on non-Undead mob in mixed pack
+	c.Fire("UI_ERROR_MESSAGE", 1, "Target is not Undead or Demon.")
+	Assert(pq:Evaluate() ~= "Exorcism", "Invalid target error must immediately suppress Exorcism")
+end)
+
+Test("81. PvP firewall: Level 60 Unsealed Wrath Paladin with fast weapon never leaks Seal of Fury twist onto player targets", function()
+	local c = CreateEnv({
+		playerLevel = 60,
+		inCombat = true,
+		weaponSpeed = 2.30,
+		swingInRange = true,
+		knownSpells = {
+			["Unsealed Wrath"] = 1310735,
+			["Seal of Command"] = 20375,
+			["Seal of Righteousness"] = 20288,
+			["Seal of Fury"] = 1311656,
+			["Judgement"] = 20271,
+			["Holy Strike"] = 678,
+			["Hammer of Justice"] = 853,
+		},
+		usableSpells = {
+			["Seal of Command"] = true,
+			["Seal of Righteousness"] = true,
+			["Seal of Fury"] = true,
+			["Judgement"] = true,
+			["Holy Strike"] = true,
+			["Hammer of Justice"] = true,
+		},
+		inRangeSpells = {
+			["Judgement"] = true,
+			["Holy Strike"] = true,
+			["Hammer of Justice"] = true,
+		},
+	})
+	c.env.UnitIsPlayer = function(u) return u == "target" end
+	c.Fire("UNIT_SPELLCAST_SUCCEEDED", "player", "sc", 20375)
+	c.Advance(1.6)
+
+	local tracker = c.ns:GetModule("CombatTracker")
+	local pq = c.ns:GetModule("PriorityQueue")
+	for _ = 1, 3 do
+		tracker:CountEcho("Seal of Command")
+	end
+	AssertEq(tracker:GetEchoes(), 3, "3 echoes accumulated against enemy player")
+
+	local cur = pq:Evaluate()
+	Assert(cur ~= "Seal of Fury" and cur ~= "Seal of Righteousness", "PvP rotation must NEVER twist into PvE secondary seals, got: " .. tostring(cur))
+	AssertEq(cur, "Hammer of Justice", "PvP Stun Combo remains 100% intact")
 end)
 
 print(string.format("\nResults: %d passed, %d failed", passed, failed))

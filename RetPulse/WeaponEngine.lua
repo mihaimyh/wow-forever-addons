@@ -24,15 +24,80 @@ function WeaponEngine:OnLogin()
 	self:RefreshTalents()
 end
 
+local function ParseSpeedFromText(text)
+	if type(text) ~= "string" or ns.IsSecret(text) then return nil end
+	local speedLabel = (type(SPEED) == "string" and not ns.IsSecret(SPEED) and SPEED ~= "") and SPEED or nil
+	local raw
+	if speedLabel then
+		raw = text:match(speedLabel .. "%s+(%d+[%.%,]%d+)")
+	end
+	if not raw then
+		raw = text:match("[Ss]peed%s+(%d+[%.%,]%d+)")
+	end
+	if not raw then return nil end
+	local val = tonumber((raw:gsub(",", ".")))
+	if val and val >= 1.0 and val <= 5.0 then
+		return math.floor(val * 100 + 0.5) / 100
+	end
+	return nil
+end
+
+local function ReadTooltipWeaponSpeed()
+	if InCombatLockdown and InCombatLockdown() then return nil end
+	if not C_TooltipInfo or not C_TooltipInfo.GetInventoryItem then return nil end
+	local ok, data = pcall(C_TooltipInfo.GetInventoryItem, "player", 16)
+	if not ok or type(data) ~= "table" or ns.IsSecret(data) then return nil end
+	local lines = data.lines
+	if type(lines) ~= "table" or ns.IsSecret(lines) then return nil end
+	for _, line in ipairs(lines) do
+		if type(line) == "table" and not ns.IsSecret(line) then
+			local okR, rightText = pcall(function() return line.rightText end)
+			if okR then
+				local sp = ParseSpeedFromText(rightText)
+				if sp then return sp end
+			end
+			local okL, leftText = pcall(function() return line.leftText end)
+			if okL then
+				local sp = ParseSpeedFromText(leftText)
+				if sp then return sp end
+			end
+		end
+	end
+	return nil
+end
+
 function WeaponEngine:ReadWeapon()
 	local ok, itemID = pcall(GetInventoryItemID, "player", 16)
 	if ok then
 		self.weaponItemID = itemID
 	end
 
+	local tracker = ns:GetModule("CombatTracker")
+	-- Ensure player seal state is scanned before reading UnitAttackSpeed on login/reload,
+	-- because WeaponEngine loads before CombatTracker in the TOC.
+	if not InCombatLockdown() and tracker and tracker.RefreshSeal and tracker.activeSeal == nil then
+		tracker:RefreshSeal()
+	end
+
 	local speedOk, speed = pcall(function()
 		return select(1, UnitAttackSpeed("player"))
 	end)
+	if speedOk and ns.IsReadable(speed) and speed > 0 then
+		self.hastedSpeed = speed
+	end
+
+	-- Best source out of combat: printed weapon speed from tooltip data, completely
+	-- immune to melee haste buffs and Seal of the Crusader (+40% attack speed).
+	local tooltipSpeed = ReadTooltipWeaponSpeed()
+	if tooltipSpeed then
+		self.weaponSpeed = tooltipSpeed
+		self.speedItemID = self.weaponItemID
+		if ns.db and type(self.weaponItemID) == "number" and not ns.IsSecret(self.weaponItemID) then
+			ns.db.weaponSpeedCache = ns.db.weaponSpeedCache or {}
+			ns.db.weaponSpeedCache[self.weaponItemID] = self.weaponSpeed
+		end
+		return
+	end
 
 	-- UnitAttackSpeed returns the hasted swing speed (e.g. 2.87s for a 3.30s
 	-- weapon under 15% haste like Warchief's Blessing) and becomes secret in
@@ -41,11 +106,20 @@ function WeaponEngine:ReadWeapon()
 	-- Seal of the Crusader also speeds swings by 40% outside GetMeleeHaste():
 	-- preserve the already-known base speed for the equipped weapon, or undo 1.4x.
 	if speedOk and ns.IsReadable(speed) and speed > 0 then
-		self.hastedSpeed = speed
-		local tracker = ns:GetModule("CombatTracker")
 		local crusaderUp = tracker and tracker.GetActiveSeal and tracker:GetActiveSeal() == ns.SPELLS.SEAL_CRUSADER
-		if crusaderUp and self.weaponSpeed and self.speedItemID == self.weaponItemID then
-			return
+		if crusaderUp then
+			if self.weaponSpeed and self.speedItemID == self.weaponItemID then
+				return
+			end
+			if ns.db and type(ns.db.weaponSpeedCache) == "table"
+				and type(self.weaponItemID) == "number" and not ns.IsSecret(self.weaponItemID) then
+				local cached = ns.db.weaponSpeedCache[self.weaponItemID]
+				if type(cached) == "number" and cached > 0 then
+					self.weaponSpeed = cached
+					self.speedItemID = self.weaponItemID
+					return
+				end
+			end
 		end
 
 		local baseSpeed = speed
@@ -62,7 +136,7 @@ function WeaponEngine:ReadWeapon()
 		end
 		self.weaponSpeed = math.floor(baseSpeed * 100 + 0.5) / 100
 		self.speedItemID = self.weaponItemID
-		if ns.db and type(self.weaponItemID) == "number" and not ns.IsSecret(self.weaponItemID) then
+		if (not crusaderUp) and ns.db and type(self.weaponItemID) == "number" and not ns.IsSecret(self.weaponItemID) then
 			ns.db.weaponSpeedCache = ns.db.weaponSpeedCache or {}
 			ns.db.weaponSpeedCache[self.weaponItemID] = self.weaponSpeed
 		end
@@ -107,24 +181,22 @@ function WeaponEngine:GetBracket()
 	local mode = (ns.db and ns.db.bracketMode) or "video"
 
 	if mode == "video" then
-		-- Three brackets, from the Unsealed Wrath deep dive.
-		if speed <= 2.5 then return "fast" end
-		if speed <= 3.2 then return "medium" end
+		-- Three brackets from the Unsealed Wrath deep dive, with 0.05s float
+		-- tolerance so de-hasting a 2.50s or 3.20s weapon never drifts up a tier.
+		if speed <= 2.55 then return "fast" end
+		if speed <= 3.25 then return "medium" end
 		return "slow"
 	end
 
 	-- Two brackets: Icy Veins treats 2.9 and faster as fast, 3.0+ as slow.
-	if speed < 3.0 then return "fast" end
+	if speed < 2.95 then return "fast" end
 	return "slow"
 end
 
 -- The hint, not the rotation: fast weapons lean Righteousness, slow ones Command.
 function WeaponEngine:GetPrimarySealHint()
-	local bracket = self:GetBracket()
-	if bracket == "fast" then return ns.SPELLS.SEAL_RIGHT end
-	if bracket == "slow" then return ns.SPELLS.SEAL_COMMAND end
-	if bracket == "medium" then return ns.SPELLS.SEAL_RIGHT end
-	return nil
+	local rot = self:GetRotation()
+	return rot and rot.primary or nil
 end
 
 -- Seal pairs by weapon speed, from the Unsealed Wrath simulations.
@@ -138,6 +210,15 @@ local ROTATIONS = {
 	           secondary = ns.SPELLS.SEAL_RIGHT, secondaryStacks = 1 },
 }
 
+-- Single-seal selections when Unsealed Wrath is not learned (e.g. Level 20-39
+-- leveling with Seal of Command, or Level 60 non-Unsealed-Wrath / Holy Shock).
+local SINGLE_SEAL = {
+	right   = { primary = ns.SPELLS.SEAL_RIGHT, primaryStacks = 3,
+	            secondary = nil, secondaryStacks = 1 },
+	command = { primary = ns.SPELLS.SEAL_COMMAND, primaryStacks = 3,
+	            secondary = nil, secondaryStacks = 1 },
+}
+
 local FALLBACK = ROTATIONS.fast
 
 function WeaponEngine:HasSealOfCommand()
@@ -145,11 +226,26 @@ function WeaponEngine:HasSealOfCommand()
 end
 
 function WeaponEngine:GetRotation()
-	-- Without the Seal of Command talent, every weapon uses the fast pairing.
+	local hasUW = (self.hasUnsealedWrath == true) or (ns.db and ns.db.twistWithoutTalent == true)
+
+	-- Without Seal of Command (levels 1-19 or untalented), Righteousness is primary
+	-- (and if Unsealed Wrath / twistWithoutTalent is active, twists with Fury).
 	if not self:HasSealOfCommand() then
-		return FALLBACK
+		return hasUW and FALLBACK or SINGLE_SEAL.right
 	end
+
+	-- With Seal of Command but WITHOUT Unsealed Wrath (levels 20-39 leveling or
+	-- non-UW builds): no echoes exist to justify the 2x SoR -> 1x SoC medium twist,
+	-- so two-handed weapons (>= 2.6s in default mode, >= 3.0s in Icy mode) stay on
+	-- Seal of Command while fast 1H weapons stay on Seal of Righteousness.
 	local bracket = self:GetBracket()
+	if not hasUW then
+		if bracket == "fast" then
+			return SINGLE_SEAL.right
+		end
+		return SINGLE_SEAL.command
+	end
+
 	return ROTATIONS[bracket] or FALLBACK
 end
 

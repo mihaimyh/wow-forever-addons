@@ -553,17 +553,24 @@ function UI:StepAnimations(elapsed)
 	end
 
 	local targetEchoes = self.targetEchoes or 0
+	local displayCap = self.displayEchoCap or 3
 	if self.pips and self.trackerVisible then
+		local col = self.wasReady and READY or GOLD
 		for i = 1, 3 do
-			local target = (i <= targetEchoes) and 1.0 or 0.16
-			local cur = self.pipAlphas[i] or 0.16
-			if math.abs(target - cur) > 0.01 then
-				local step = math.min(1, dt * 10)
-				cur = cur + (target - cur) * step
-				self.pipAlphas[i] = cur
-				self.pips[i]:SetColorTexture(GOLD[1], GOLD[2], GOLD[3], cur)
+			local shown = (i <= displayCap)
+			self.pips[i]:SetShown(shown)
+			if shown then
+				local target = (i <= targetEchoes) and 1.0 or 0.16
+				local cur = self.pipAlphas[i] or 0.16
+				if math.abs(target - cur) > 0.01 or self.lastPipReady ~= self.wasReady then
+					local step = math.min(1, dt * 10)
+					cur = cur + (target - cur) * step
+					self.pipAlphas[i] = cur
+					self.pips[i]:SetColorTexture(col[1], col[2], col[3], cur)
+				end
 			end
 		end
+		self.lastPipReady = self.wasReady
 	end
 
 	local tracker = ns:GetModule("CombatTracker")
@@ -1119,7 +1126,7 @@ function UI:RefreshInner()
 	local sealLeft = tracker:GetSealRemaining()
 
 	local activeSeal = tracker:GetActiveSeal()
-	local ready = queue:IsTwistReady(trackerOn)
+	local ready = trackerOn and (current ~= nil) and (current == queue.current) and queue:IsTwistReady(trackerOn) or false
 	local warnSeal = activeSeal ~= nil and sealLeft ~= nil and sealLeft <= 3
 
 	if current then
@@ -1225,14 +1232,28 @@ function UI:RefreshInner()
 		self.mainIcon:SetVertexColor(1, 1, 1, 1)
 	end
 
-	local maxEchoes = tracker:GetMaxEchoes()
+	local targetCap = (queue.GetEchoTarget and queue:GetEchoTarget()) or tracker:GetMaxEchoes()
+	local displayCap = math.min(tracker:GetMaxEchoes(), math.max(targetCap, echoes))
+	self.displayEchoCap = displayCap
+	if self.trackerVisible and self.pips then
+		local pipCol = ready and READY or GOLD
+		for i = 1, 3 do
+			local shown = (i <= displayCap)
+			self.pips[i]:SetShown(shown)
+			if shown then
+				local alpha = (i <= echoes) and 1.0 or 0.16
+				self.pipAlphas[i] = alpha
+				self.pips[i]:SetColorTexture(pipCol[1], pipCol[2], pipCol[3], alpha)
+			end
+		end
+	end
 	local remaining = tracker:GetEchoRemaining()
 	local duration = tracker:GetEchoDuration()
 	if remaining and duration > 0 then
 		self.echoBar:SetStatusBarColor(GOLD[1], GOLD[2], GOLD[3], remaining < 4 and 0.55 or 0.95)
-		self.echoText:SetText(string.format("%d/%d  %s", echoes, maxEchoes, Fmt(remaining)))
+		self.echoText:SetText(string.format("%d/%d  %s", echoes, displayCap, Fmt(remaining)))
 	else
-		self.echoText:SetText(string.format("%d/%d", echoes, maxEchoes))
+		self.echoText:SetText(string.format("%d/%d", echoes, displayCap))
 	end
 
 	local appliedDurationObj = false
@@ -1288,7 +1309,7 @@ function UI:RefreshInner()
 			for i = 1, 3 do
 				local pip = self.npPips[i]
 				if pip then
-					if showNpPips then
+					if showNpPips and i <= displayCap then
 						local lit = i <= echoes
 						local col = ready and READY or GOLD
 						pip:SetColorTexture(col[1], col[2], col[3], lit and 0.95 or 0.22)
